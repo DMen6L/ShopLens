@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ShopLens</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header>
+    <h1>ShopLens</h1>
+    <nav>
+      <button id="tab-register" class="tab active" onclick="switchTab('register')">Register</button>
+      <button id="tab-query"    class="tab"        onclick="switchTab('query')">Query</button>
+    </nav>
+  </header>
+
+  <main>
+    <!-- Register panel -->
+    <section id="panel-register" class="panel">
+      <h2>Register a Product</h2>
+      <form id="register-form">
+        <label>Product name <input type="text" name="name" required /></label>
+        <label>Image <input type="file" name="image" accept="image/*" required /></label>
+        <button type="submit">Register</button>
+      </form>
+      <div id="register-result" class="result"></div>
+    </section>
+
+    <!-- Query panel -->
+    <section id="panel-query" class="panel hidden">
+      <h2>Find a Product</h2>
+      <form id="query-form">
+        <label>Image <input type="file" name="image" accept="image/*" required /></label>
+        <button type="submit">Search</button>
+      </form>
+      <div id="query-result" class="result"></div>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
