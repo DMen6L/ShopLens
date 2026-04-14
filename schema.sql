@@ -3,8 +3,9 @@ CREATE EXTENSION IF NOT EXISTS vector;
 
 -- Products table
 CREATE TABLE IF NOT EXISTS products (
-    id          SERIAL PRIMARY KEY,
-    name        TEXT        NOT NULL,
+    id            SERIAL PRIMARY KEY,
+    name          TEXT        NOT NULL,
+    image_data    BYTEA,                  -- raw bytes of the original uploaded image
     registered_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

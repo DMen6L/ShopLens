@@ -43,7 +43,7 @@ class ProductDB:
     # Products
     # ------------------------------------------------------------------
 
-    def add(self, name: str, features: dict[str, Any]) -> int:
+    def add(self, name: str, features: dict[str, Any], image_data: bytes | None = None) -> int:
         """
         Insert a product and its features atomically.
 
@@ -54,13 +54,15 @@ class ProductDB:
             corner_density  float
             embedding       np.ndarray (3000,)  float32  — L2-normed HSV histogram
 
+        image_data : raw bytes of the original uploaded image (for visualization).
+
         Returns the new product id.
         """
         with self.conn:
             with self.conn.cursor() as cur:
                 cur.execute(
-                    "INSERT INTO products (name) VALUES (%s) RETURNING id",
-                    (name,),
+                    "INSERT INTO products (name, image_data) VALUES (%s, %s) RETURNING id",
+                    (name, psycopg2.Binary(image_data) if image_data else None),
                 )
                 product_id: int = cur.fetchone()[0]
 
@@ -88,7 +90,7 @@ class ProductDB:
         with self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 """
-                SELECT p.id, p.name, p.registered_at,
+                SELECT p.id, p.name, p.image_data, p.registered_at,
                        f.sift_desc, f.hist_hsv, f.hu_moments,
                        f.corner_density, f.embedding
                 FROM   products p
@@ -114,7 +116,7 @@ class ProductDB:
         with self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 """
-                SELECT p.id, p.name, p.registered_at,
+                SELECT p.id, p.name, p.image_data, p.registered_at,
                        f.sift_desc, f.hist_hsv, f.hu_moments,
                        f.corner_density, f.embedding
                 FROM   products p
