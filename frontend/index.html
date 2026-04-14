@@ -4,40 +4,135 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ShopLens</title>
-  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="stylesheet" href="style.css" />
 </head>
 <body>
   <header>
-    <h1>ShopLens</h1>
-    <nav>
-      <button id="tab-register" class="tab active" onclick="switchTab('register')">Register</button>
-      <button id="tab-query"    class="tab"        onclick="switchTab('query')">Query</button>
-    </nav>
+    <div class="header-inner">
+      <div class="brand">
+        <span class="brand-icon">◈</span>
+        <h1>ShopLens</h1>
+      </div>
+      <nav>
+        <button id="tab-register" class="tab active" onclick="switchTab('register')">Register</button>
+        <button id="tab-query"    class="tab"        onclick="switchTab('query')">Find</button>
+        <button id="tab-products" class="tab"        onclick="switchTab('products')">Catalog</button>
+      </nav>
+    </div>
   </header>
 
   <main>
-    <!-- Register panel -->
+
+    <!-- ── Register panel ─────────────────────────────────────────────── -->
     <section id="panel-register" class="panel">
-      <h2>Register a Product</h2>
+      <div class="panel-header">
+        <h2>Register a Product</h2>
+        <p class="panel-sub">Upload a product image to add it to the catalog.</p>
+      </div>
+
       <form id="register-form">
-        <label>Product name <input type="text" name="name" required /></label>
-        <label>Image <input type="file" name="image" accept="image/*" required /></label>
-        <button type="submit">Register</button>
+        <div class="field">
+          <label for="reg-name">Product name</label>
+          <input id="reg-name" type="text" name="name"
+                 placeholder="e.g. Blue Denim Jacket" required />
+        </div>
+
+        <div class="field">
+          <label>Image</label>
+          <div class="file-drop" id="reg-drop">
+            <input type="file" name="file" id="reg-file" accept="image/*" required />
+            <div class="file-drop-label">
+              <span class="file-drop-icon">↑</span>
+              <span>Drop image here or <u>browse</u></span>
+            </div>
+          </div>
+          <div class="img-preview-wrap hidden" id="reg-preview-wrap">
+            <img id="reg-preview" alt="preview" />
+            <button type="button" class="clear-btn" onclick="clearPreview('reg')">✕</button>
+          </div>
+        </div>
+
+        <div class="field field-row">
+          <label>Segmentation</label>
+          <div class="seg-opts">
+            <label class="radio-opt">
+              <input type="radio" name="seg_method" value="grabcut" checked /> GrabCut
+            </label>
+            <label class="radio-opt">
+              <input type="radio" name="seg_method" value="watershed" /> Watershed
+            </label>
+          </div>
+        </div>
+
+        <button type="submit" class="btn-primary" id="reg-submit">Register Product</button>
       </form>
+
       <div id="register-result" class="result"></div>
     </section>
 
-    <!-- Query panel -->
+    <!-- ── Query panel ────────────────────────────────────────────────── -->
     <section id="panel-query" class="panel hidden">
-      <h2>Find a Product</h2>
+      <div class="panel-header">
+        <h2>Find a Product</h2>
+        <p class="panel-sub">Upload an image to search the catalog for similar products.</p>
+      </div>
+
       <form id="query-form">
-        <label>Image <input type="file" name="image" accept="image/*" required /></label>
-        <button type="submit">Search</button>
+        <div class="field">
+          <label>Image</label>
+          <div class="file-drop" id="q-drop">
+            <input type="file" name="file" id="q-file" accept="image/*" required />
+            <div class="file-drop-label">
+              <span class="file-drop-icon">↑</span>
+              <span>Drop image here or <u>browse</u></span>
+            </div>
+          </div>
+          <div class="img-preview-wrap hidden" id="q-preview-wrap">
+            <img id="q-preview" alt="preview" />
+            <button type="button" class="clear-btn" onclick="clearPreview('q')">✕</button>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="field field-row">
+            <label for="q-topk">Results</label>
+            <select id="q-topk" name="top_k">
+              <option value="3">Top 3</option>
+              <option value="5" selected>Top 5</option>
+              <option value="10">Top 10</option>
+            </select>
+          </div>
+
+          <div class="field field-row">
+            <label>Segmentation</label>
+            <div class="seg-opts">
+              <label class="radio-opt">
+                <input type="radio" name="seg_method" value="grabcut" checked /> GrabCut
+              </label>
+              <label class="radio-opt">
+                <input type="radio" name="seg_method" value="watershed" /> Watershed
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <button type="submit" class="btn-primary" id="q-submit">Search</button>
       </form>
+
       <div id="query-result" class="result"></div>
     </section>
+
+    <!-- ── Catalog panel ──────────────────────────────────────────────── -->
+    <section id="panel-products" class="panel hidden">
+      <div class="panel-header">
+        <h2>Product Catalog</h2>
+        <p class="panel-sub">All registered products.</p>
+      </div>
+      <div id="catalog-result" class="result"></div>
+    </section>
+
   </main>
 
-  <script src="/static/app.js"></script>
+  <script src="app.js"></script>
 </body>
 </html>

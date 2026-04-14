@@ -53,8 +53,6 @@ async def lifespan(application: FastAPI):
 
 app = FastAPI(title="ShopLens", lifespan=lifespan)
 
-# Serve frontend static files
-app.mount("/static", StaticFiles(directory="frontend"), name="static")
 
 
 # ---------------------------------------------------------------------------
@@ -249,9 +247,7 @@ def delete_product(product_id: int):
 
 
 # ---------------------------------------------------------------------------
-# Frontend root
+# Frontend — must be last so API routes take precedence
 # ---------------------------------------------------------------------------
 
-@app.get("/")
-def index():
-    return FileResponse("frontend/index.html")
+app.mount("/", StaticFiles(directory="frontend", html=True), name="static")
