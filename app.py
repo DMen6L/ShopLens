@@ -131,11 +131,41 @@ def list_products():
 # Products — register
 # ---------------------------------------------------------------------------
 
+@app.post("/products/preview-segmentation")
+async def preview_segmentation(
+    file: UploadFile = File(...),
+    seg_method: str = Form("grabcut"),
+):
+    """
+    Run segmentation on an uploaded image and return the result for interactive editing.
+
+    Returns:
+      {
+        "original_img": "<base64 PNG of the original image>",
+        "mask_b64":     "<base64 grayscale PNG — 255 foreground, 0 background>",
+        "masked_img":   "<base64 PNG of the initial masked result>"
+      }
+    """
+    raw = await file.read()
+    img = _decode_image(raw)
+    mask, masked_img = _segment(img, seg_method)
+    ok, mask_buf = cv2.imencode(".png", mask)
+    if not ok:
+        raise RuntimeError("cv2.imencode failed for mask")
+    mask_b64 = base64.b64encode(mask_buf.tobytes()).decode("ascii")
+    return {
+        "original_img": _encode_png(img),
+        "mask_b64": mask_b64,
+        "masked_img": _encode_png(masked_img),
+    }
+
+
 @app.post("/products/register", status_code=201)
 async def register_product(
     name: str = Form(...),
     file: UploadFile = File(...),
     seg_method: str = Form("grabcut"),
+    mask_data: str | None = Form(None),
 ):
     """
     Register a new product.
@@ -153,7 +183,21 @@ async def register_product(
     """
     raw = await file.read()
     img = _decode_image(raw)
-    mask, masked_img = _segment(img, seg_method)
+
+    if mask_data:
+        mask_bytes = base64.b64decode(mask_data)
+        mask_arr = np.frombuffer(mask_bytes, dtype=np.uint8)
+        mask = cv2.imdecode(mask_arr, cv2.IMREAD_GRAYSCALE)
+        if mask is None:
+            raise HTTPException(status_code=400, detail="Could not decode provided mask image")
+        if mask.shape[:2] != img.shape[:2]:
+            mask = cv2.resize(mask, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_NEAREST)
+        _, mask = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
+        if np.count_nonzero(mask) == 0:
+            raise HTTPException(status_code=400, detail="Mask is empty — mark at least some foreground area")
+        masked_img = cv2.bitwise_and(img, img, mask=mask)
+    else:
+        mask, masked_img = _segment(img, seg_method)
 
     features = pipeline.extract(img, mask)
     product_id = db.add(name, features, image_data=raw)

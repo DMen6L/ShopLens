@@ -57,6 +57,7 @@ function clearPreview(prefix) {
   input.value = '';
   wrap.classList.add('hidden');
   drop.style.display = '';
+  if (prefix === 'reg') cancelMaskEditor();
 }
 
 // ---------------------------------------------------------------------------
@@ -78,7 +79,218 @@ function scoreBadgeClass(score) {
 }
 
 // ---------------------------------------------------------------------------
-// Register
+// Mask editor state
+// ---------------------------------------------------------------------------
+
+let origImg        = null;   // HTMLImageElement
+let maskData       = null;   // Uint8Array (origW * origH): 255=fg, 0=bg
+let initialMask    = null;   // Uint8Array — copy of the initial auto-mask (for reset)
+let origW = 0, origH = 0;
+let dispW = 0, dispH = 0;
+let scaleX = 1, scaleY = 1;
+let brushMode      = 'fg';   // 'fg' | 'bg'
+let brushSize      = 16;
+let isPainting     = false;
+let overlayCanvas  = null;   // reused offscreen canvas for compositing
+let canvasEventsWired = false;
+
+// ---------------------------------------------------------------------------
+// Mask editor — init
+// ---------------------------------------------------------------------------
+
+function initMaskEditor(origImgB64, maskB64) {
+  origImg = new Image();
+  origImg.onload = () => {
+    origW = origImg.naturalWidth;
+    origH = origImg.naturalHeight;
+
+    const maskImg = new Image();
+    maskImg.onload = () => {
+      // Extract mask values from the grayscale PNG
+      const tmp = document.createElement('canvas');
+      tmp.width = origW; tmp.height = origH;
+      const tmpCtx = tmp.getContext('2d');
+      tmpCtx.drawImage(maskImg, 0, 0, origW, origH);
+      const px = tmpCtx.getImageData(0, 0, origW, origH).data;
+
+      maskData    = new Uint8Array(origW * origH);
+      initialMask = new Uint8Array(origW * origH);
+      for (let i = 0; i < origW * origH; i++) {
+        const v = px[i * 4] > 127 ? 255 : 0;
+        maskData[i]    = v;
+        initialMask[i] = v;
+      }
+
+      setupDisplayCanvas();
+      wireCanvasEvents();
+      renderMaskCanvas();
+
+      document.getElementById('mask-editor').classList.remove('hidden');
+      document.getElementById('register-result').innerHTML = '';
+    };
+    maskImg.src = 'data:image/png;base64,' + maskB64;
+  };
+  origImg.src = 'data:image/png;base64,' + origImgB64;
+}
+
+function setupDisplayCanvas() {
+  const canvas = document.getElementById('mask-canvas');
+  const wrap   = document.getElementById('mask-canvas-wrap');
+  const maxW   = wrap.clientWidth || 640;
+  const scale  = Math.min(1, maxW / origW);
+  dispW  = Math.max(1, Math.round(origW * scale));
+  dispH  = Math.max(1, Math.round(origH * scale));
+  canvas.width  = dispW;
+  canvas.height = dispH;
+  scaleX = origW / dispW;
+  scaleY = origH / dispH;
+}
+
+// ---------------------------------------------------------------------------
+// Mask editor — rendering
+// ---------------------------------------------------------------------------
+
+function renderMaskCanvas() {
+  const canvas = document.getElementById('mask-canvas');
+  const ctx    = canvas.getContext('2d');
+
+  ctx.drawImage(origImg, 0, 0, dispW, dispH);
+
+  // Reuse offscreen canvas for the red/green overlay
+  if (!overlayCanvas || overlayCanvas.width !== dispW || overlayCanvas.height !== dispH) {
+    overlayCanvas = document.createElement('canvas');
+    overlayCanvas.width  = dispW;
+    overlayCanvas.height = dispH;
+  }
+  const oc     = overlayCanvas.getContext('2d');
+  const ovData = oc.createImageData(dispW, dispH);
+  const d      = ovData.data;
+
+  for (let dy = 0; dy < dispH; dy++) {
+    for (let dx = 0; dx < dispW; dx++) {
+      const ox = Math.min(origW - 1, (dx * scaleX) | 0);
+      const oy = Math.min(origH - 1, (dy * scaleY) | 0);
+      const pidx = (dy * dispW + dx) * 4;
+      if (maskData[oy * origW + ox] < 128) {
+        // Background: semi-transparent red tint
+        d[pidx]     = 200;
+        d[pidx + 1] = 0;
+        d[pidx + 2] = 0;
+        d[pidx + 3] = 145;
+      }
+      // Foreground: leave transparent (original shows through)
+    }
+  }
+
+  oc.putImageData(ovData, 0, 0);
+  ctx.drawImage(overlayCanvas, 0, 0);
+}
+
+// ---------------------------------------------------------------------------
+// Mask editor — painting
+// ---------------------------------------------------------------------------
+
+function paintAt(clientX, clientY) {
+  const canvas = document.getElementById('mask-canvas');
+  const rect   = canvas.getBoundingClientRect();
+  // Map client coords → display canvas coords → original image coords
+  const cx = (clientX - rect.left) * (dispW / rect.width);
+  const cy = (clientY - rect.top)  * (dispH / rect.height);
+  const ox = Math.round(cx * scaleX);
+  const oy = Math.round(cy * scaleY);
+
+  // Brush radius in original-image pixels (keeps visual size proportional to display)
+  const r   = Math.max(1, Math.round((brushSize / 2) * scaleX));
+  const val = brushMode === 'fg' ? 255 : 0;
+  const r2  = r * r;
+
+  const x0 = Math.max(0, ox - r);
+  const x1 = Math.min(origW - 1, ox + r);
+  const y0 = Math.max(0, oy - r);
+  const y1 = Math.min(origH - 1, oy + r);
+
+  for (let py = y0; py <= y1; py++) {
+    for (let px = x0; px <= x1; px++) {
+      if ((px - ox) * (px - ox) + (py - oy) * (py - oy) <= r2) {
+        maskData[py * origW + px] = val;
+      }
+    }
+  }
+
+  renderMaskCanvas();
+}
+
+function wireCanvasEvents() {
+  if (canvasEventsWired) return;
+  canvasEventsWired = true;
+
+  const canvas = document.getElementById('mask-canvas');
+
+  canvas.addEventListener('mousedown', e => {
+    isPainting = true;
+    paintAt(e.clientX, e.clientY);
+  });
+  canvas.addEventListener('mousemove', e => {
+    if (isPainting) paintAt(e.clientX, e.clientY);
+  });
+  canvas.addEventListener('mouseup',    () => { isPainting = false; });
+  canvas.addEventListener('mouseleave', () => { isPainting = false; });
+
+  // Touch support
+  canvas.addEventListener('touchstart', e => {
+    e.preventDefault();
+    isPainting = true;
+    paintAt(e.touches[0].clientX, e.touches[0].clientY);
+  }, { passive: false });
+  canvas.addEventListener('touchmove', e => {
+    e.preventDefault();
+    if (isPainting) paintAt(e.touches[0].clientX, e.touches[0].clientY);
+  }, { passive: false });
+  canvas.addEventListener('touchend', () => { isPainting = false; });
+}
+
+// ---------------------------------------------------------------------------
+// Mask editor — controls
+// ---------------------------------------------------------------------------
+
+function setBrushMode(mode) {
+  brushMode = mode;
+  document.getElementById('brush-fg-btn').classList.toggle('active', mode === 'fg');
+  document.getElementById('brush-bg-btn').classList.toggle('active', mode === 'bg');
+}
+
+function resetMask() {
+  if (!initialMask) return;
+  maskData.set(initialMask);
+  renderMaskCanvas();
+}
+
+function getMaskBase64() {
+  const tmp = document.createElement('canvas');
+  tmp.width  = origW;
+  tmp.height = origH;
+  const ctx  = tmp.getContext('2d');
+  const imgData = ctx.createImageData(origW, origH);
+  for (let i = 0; i < origW * origH; i++) {
+    const v = maskData[i];
+    imgData.data[i * 4]     = v;
+    imgData.data[i * 4 + 1] = v;
+    imgData.data[i * 4 + 2] = v;
+    imgData.data[i * 4 + 3] = 255;
+  }
+  ctx.putImageData(imgData, 0, 0);
+  return tmp.toDataURL('image/png').split(',')[1];
+}
+
+function cancelMaskEditor() {
+  document.getElementById('mask-editor').classList.add('hidden');
+  const btn = document.getElementById('reg-submit');
+  btn.disabled = false;
+  btn.textContent = 'Preview Mask →';
+}
+
+// ---------------------------------------------------------------------------
+// Register — step 1: preview segmentation
 // ---------------------------------------------------------------------------
 
 document.getElementById('register-form').addEventListener('submit', async (e) => {
@@ -88,7 +300,66 @@ document.getElementById('register-form').addEventListener('submit', async (e) =>
   const out  = document.getElementById('register-result');
   const btn  = document.getElementById('reg-submit');
 
+  const fileInput = document.getElementById('reg-file');
+  if (!fileInput.files[0]) {
+    setError(out, 'Please select an image first.');
+    return;
+  }
+
   const formData = new FormData(form);
+  btn.disabled = true;
+  btn.textContent = 'Loading…';
+  setLoading(out, 'Running segmentation…');
+
+  try {
+    const res  = await fetch('/products/preview-segmentation', { method: 'POST', body: formData });
+    const json = await res.json();
+
+    if (!res.ok) {
+      setError(out, 'Error: ' + (json.detail ?? res.statusText));
+      btn.disabled = false;
+      btn.textContent = 'Preview Mask →';
+      return;
+    }
+
+    out.innerHTML = '';
+    initMaskEditor(json.original_img, json.mask_b64);
+    // btn stays disabled while editor is open; cancelMaskEditor() re-enables it
+  } catch (err) {
+    setError(out, 'Network error: ' + err.message);
+    btn.disabled = false;
+    btn.textContent = 'Preview Mask →';
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Register — step 2: confirm with edited mask
+// ---------------------------------------------------------------------------
+
+async function confirmRegister() {
+  const btn  = document.getElementById('mask-confirm-btn');
+  const out  = document.getElementById('register-result');
+  const form = document.getElementById('register-form');
+
+  const name      = form.querySelector('input[name="name"]').value.trim();
+  const fileInput = document.getElementById('reg-file');
+  const segMethod = form.querySelector('input[name="seg_method"]:checked').value;
+
+  if (!name) {
+    setError(out, 'Product name is required.');
+    return;
+  }
+  if (!fileInput.files[0]) {
+    setError(out, 'Image file is missing.');
+    return;
+  }
+
+  const formData = new FormData();
+  formData.append('name', name);
+  formData.append('file', fileInput.files[0]);
+  formData.append('seg_method', segMethod);
+  formData.append('mask_data', getMaskBase64());
+
   btn.disabled = true;
   setLoading(out, 'Registering…');
 
@@ -101,10 +372,10 @@ document.getElementById('register-form').addEventListener('submit', async (e) =>
       return;
     }
 
-    const productName = formData.get('name');
+    cancelMaskEditor();
     out.innerHTML = `
       <div class="alert-success">
-        <strong>${productName}</strong> registered —
+        <strong>${name}</strong> registered —
         <span class="reg-id">id ${json.product_id}</span>
       </div>
       ${json.masked_img ? `
@@ -114,12 +385,15 @@ document.getElementById('register-form').addEventListener('submit', async (e) =>
              alt="segmented foreground" />
       ` : ''}
     `;
+    out.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    form.reset();
+    clearPreview('reg');
   } catch (err) {
     setError(out, 'Network error: ' + err.message);
   } finally {
     btn.disabled = false;
   }
-});
+}
 
 // ---------------------------------------------------------------------------
 // Query
@@ -253,7 +527,6 @@ async function deleteProduct(id, btn) {
       btn.textContent = 'Delete';
       return;
     }
-    // Fade out and remove the row
     const row = document.getElementById('row-' + id);
     if (row) row.remove();
   } catch (err) {

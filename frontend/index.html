@@ -64,8 +64,43 @@
           </div>
         </div>
 
-        <button type="submit" class="btn-primary" id="reg-submit">Register Product</button>
+        <button type="submit" class="btn-primary" id="reg-submit">Preview Mask →</button>
       </form>
+
+      <!-- ── Mask editor — shown after preview-segmentation returns ──────── -->
+      <div id="mask-editor" class="mask-editor hidden">
+        <div class="mask-editor-hdr">
+          <div>
+            <p class="mask-editor-title">Refine Segmentation</p>
+            <p class="panel-sub">Paint to fix foreground / background before registering.</p>
+          </div>
+          <button type="button" class="btn-ghost" onclick="cancelMaskEditor()">← Back</button>
+        </div>
+        <div class="mask-tools">
+          <button type="button" id="brush-fg-btn" class="brush-tool active" onclick="setBrushMode('fg')">
+            <span class="brush-dot brush-dot-fg"></span>Foreground
+          </button>
+          <button type="button" id="brush-bg-btn" class="brush-tool" onclick="setBrushMode('bg')">
+            <span class="brush-dot brush-dot-bg"></span>Background
+          </button>
+          <label class="size-label">
+            Brush
+            <input type="range" id="brush-size" min="4" max="60" value="16"
+                   oninput="brushSize = +this.value; document.getElementById('brush-size-val').textContent = this.value" />
+            <span id="brush-size-val" class="size-val">16</span>px
+          </label>
+          <button type="button" class="btn-ghost-sm" onclick="resetMask()">Reset</button>
+        </div>
+        <div class="mask-canvas-wrap" id="mask-canvas-wrap">
+          <canvas id="mask-canvas"></canvas>
+          <p class="canvas-hint">Click or drag to paint &nbsp;·&nbsp; Foreground = keep &nbsp;·&nbsp; Background = remove</p>
+        </div>
+        <div class="mask-editor-actions">
+          <button type="button" id="mask-confirm-btn" class="btn-primary" onclick="confirmRegister()">
+            Register Product
+          </button>
+        </div>
+      </div>
 
       <div id="register-result" class="result"></div>
     </section>
