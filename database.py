@@ -14,6 +14,7 @@ from typing import Any
 import numpy as np
 import psycopg2
 import psycopg2.extras
+from pgvector.psycopg2 import register_vector
 
 
 class ProductDB:
@@ -28,6 +29,7 @@ class ProductDB:
     def connect(self) -> None:
         self._conn = psycopg2.connect(self._dsn)
         self._conn.autocommit = False
+        register_vector(self._conn)
 
     def close(self) -> None:
         if self._conn and not self._conn.closed:

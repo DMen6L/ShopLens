@@ -405,6 +405,15 @@ select:focus { border-color: var(--accent); }
 
 .pid-cell  { font-family: ui-monospace, monospace; color: var(--muted); font-size: 0.82rem; }
 .date-cell { color: var(--muted); font-size: 0.82rem; }
+.thumb-cell { width: 52px; padding: 0.3rem 0.5rem; }
+.catalog-thumb {
+  width: 44px;
+  height: 44px;
+  object-fit: cover;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  display: block;
+}
 
 .del-btn {
   background: none;

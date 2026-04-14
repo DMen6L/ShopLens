@@ -11,4 +11,5 @@ dependencies = [
     "python-multipart==0.0.9",
     "qdrant-client==1.9.1",
     "python-dotenv>=1.2.2",
+    "pgvector>=0.4.2",
 ]

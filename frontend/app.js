@@ -204,6 +204,7 @@ async function loadCatalog() {
       <table class="catalog-table">
         <thead>
           <tr>
+            <th></th>
             <th>ID</th>
             <th>Name</th>
             <th>Registered</th>
@@ -213,6 +214,12 @@ async function loadCatalog() {
         <tbody>
           ${rows.map(r => `
             <tr id="row-${r.id}">
+              <td class="thumb-cell">
+                <img class="catalog-thumb"
+                     src="/products/${r.id}/image"
+                     alt="${r.name}"
+                     onerror="this.style.display='none'" />
+              </td>
               <td class="pid-cell">${r.id}</td>
               <td>${r.name}</td>
               <td class="date-cell">

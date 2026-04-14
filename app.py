@@ -22,7 +22,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from database import ProductDB
@@ -99,7 +99,13 @@ def _encode_png(img: np.ndarray) -> str:
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    try:
+        with db.conn.cursor() as cur:
+            cur.execute("SELECT 1")
+        db_ok = True
+    except Exception:
+        db_ok = False
+    return {"status": "ok" if db_ok else "degraded", "db": db_ok}
 
 
 # ---------------------------------------------------------------------------
@@ -244,6 +250,25 @@ def delete_product(product_id: int):
         raise HTTPException(status_code=404, detail=f"Product {product_id} not found")
     vs.delete(product_id)
     return {"deleted": product_id}
+
+
+# ---------------------------------------------------------------------------
+# Products — image
+# ---------------------------------------------------------------------------
+
+@app.get("/products/{product_id}/image")
+def get_product_image(product_id: int):
+    """Return the raw stored image for a product (JPEG or PNG, whatever was uploaded)."""
+    row = db.get_by_id(product_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Product {product_id} not found")
+    image_data = row.get("image_data")
+    if not image_data:
+        raise HTTPException(status_code=404, detail="No image stored for this product")
+    raw = bytes(image_data)
+    # Detect content type by magic bytes
+    content_type = "image/jpeg" if raw[:2] == b"\xff\xd8" else "image/png"
+    return Response(content=raw, media_type=content_type)
 
 
 # ---------------------------------------------------------------------------
