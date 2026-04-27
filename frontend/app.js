@@ -5,6 +5,10 @@
 // ---------------------------------------------------------------------------
 
 function switchTab(name) {
+  // If the mask editor is open, dismiss it and restore the button it came from
+  const editor = document.getElementById('mask-editor');
+  if (!editor.classList.contains('hidden')) cancelMaskEditor();
+
   document.querySelectorAll('.panel').forEach(p => p.classList.add('hidden'));
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   document.getElementById('panel-' + name).classList.remove('hidden');
@@ -57,7 +61,8 @@ function clearPreview(prefix) {
   input.value = '';
   wrap.classList.add('hidden');
   drop.style.display = '';
-  if (prefix === 'reg') cancelMaskEditor();
+  const editor = document.getElementById('mask-editor');
+  if (!editor.classList.contains('hidden')) cancelMaskEditor();
 }
 
 // ---------------------------------------------------------------------------
@@ -93,12 +98,15 @@ let brushSize      = 16;
 let isPainting     = false;
 let overlayCanvas  = null;   // reused offscreen canvas for compositing
 let canvasEventsWired = false;
+let maskEditorContext = 'register';  // 'register' | 'query'
 
 // ---------------------------------------------------------------------------
 // Mask editor — init
 // ---------------------------------------------------------------------------
 
-function initMaskEditor(origImgB64, maskB64) {
+function initMaskEditor(origImgB64, maskB64, context) {
+  maskEditorContext = context || 'register';
+
   origImg = new Image();
   origImg.onload = () => {
     origW = origImg.naturalWidth;
@@ -125,8 +133,21 @@ function initMaskEditor(origImgB64, maskB64) {
       wireCanvasEvents();
       renderMaskCanvas();
 
+      // Update subtitle and confirm button text to match the current context
+      const isQuery = maskEditorContext === 'query';
+      document.getElementById('mask-editor-sub').textContent = isQuery
+        ? 'Paint to fix foreground / background before searching.'
+        : 'Paint to fix foreground / background before registering.';
+      document.getElementById('mask-confirm-btn').textContent = isQuery
+        ? 'Search →'
+        : 'Register Product';
+
+      // Hide the active panel and show the editor in its place
+      document.getElementById('panel-' + (isQuery ? 'query' : 'register')).classList.add('hidden');
       document.getElementById('mask-editor').classList.remove('hidden');
-      document.getElementById('register-result').innerHTML = '';
+
+      // Clear any stale result from the active panel
+      document.getElementById(isQuery ? 'query-result' : 'register-result').innerHTML = '';
     };
     maskImg.src = 'data:image/png;base64,' + maskB64;
   };
@@ -259,6 +280,20 @@ function setBrushMode(mode) {
   document.getElementById('brush-bg-btn').classList.toggle('active', mode === 'bg');
 }
 
+function invertMask() {
+  if (!maskData) return;
+  for (let i = 0; i < maskData.length; i++) {
+    maskData[i] = maskData[i] > 127 ? 0 : 255;
+  }
+  renderMaskCanvas();
+  // Brief invert-flash animation so the change is unmistakable
+  const canvas = document.getElementById('mask-canvas');
+  canvas.classList.remove('mask-invert-anim');
+  void canvas.offsetWidth; // force reflow to restart the animation
+  canvas.classList.add('mask-invert-anim');
+  canvas.addEventListener('animationend', () => canvas.classList.remove('mask-invert-anim'), { once: true });
+}
+
 function resetMask() {
   if (!initialMask) return;
   maskData.set(initialMask);
@@ -284,9 +319,50 @@ function getMaskBase64() {
 
 function cancelMaskEditor() {
   document.getElementById('mask-editor').classList.add('hidden');
-  const btn = document.getElementById('reg-submit');
+  const isQuery = maskEditorContext === 'query';
+  // Restore the panel that was hidden when the editor opened
+  document.getElementById(isQuery ? 'panel-query' : 'panel-register').classList.remove('hidden');
+  // Re-enable the submit button that triggered the editor
+  const btn = document.getElementById(isQuery ? 'q-submit' : 'reg-submit');
   btn.disabled = false;
   btn.textContent = 'Preview Mask →';
+}
+
+// ---------------------------------------------------------------------------
+// Query results renderer (shared by the form-submit and confirmQuery paths)
+// ---------------------------------------------------------------------------
+
+function renderQueryResults(json, out) {
+  if (!json.results || json.results.length === 0) {
+    out.innerHTML = '<p class="status-msg">No matches found.</p>';
+    return;
+  }
+  out.innerHTML = `
+    <div class="match-list">
+      ${json.results.map((r, i) => `
+        <div class="match-card">
+          <div class="match-card-header">
+            <h3>#${i + 1} — ${r.name}</h3>
+            <span class="score-badge ${scoreBadgeClass(r.score)}">
+              ${(r.score * 100).toFixed(1)}%
+            </span>
+          </div>
+          <div class="match-card-body">
+            <div class="match-img-section">
+              <div class="col-label">Keypoint match</div>
+              <img src="data:image/png;base64,${r.match_img}"
+                   alt="ORB keypoint match visualization" />
+            </div>
+            <div class="match-bars-section">
+              <div class="col-label">Score breakdown</div>
+              <img src="data:image/png;base64,${r.score_bars_img}"
+                   alt="score breakdown bar chart" />
+            </div>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+  `;
 }
 
 // ---------------------------------------------------------------------------
@@ -323,7 +399,7 @@ document.getElementById('register-form').addEventListener('submit', async (e) =>
     }
 
     out.innerHTML = '';
-    initMaskEditor(json.original_img, json.mask_b64);
+    initMaskEditor(json.original_img, json.mask_b64, 'register');
     // btn stays disabled while editor is open; cancelMaskEditor() re-enables it
   } catch (err) {
     setError(out, 'Network error: ' + err.message);
@@ -396,7 +472,7 @@ async function confirmRegister() {
 }
 
 // ---------------------------------------------------------------------------
-// Query
+// Query — step 1: preview segmentation mask
 // ---------------------------------------------------------------------------
 
 document.getElementById('query-form').addEventListener('submit', async (e) => {
@@ -406,9 +482,69 @@ document.getElementById('query-form').addEventListener('submit', async (e) => {
   const out  = document.getElementById('query-result');
   const btn  = document.getElementById('q-submit');
 
+  const fileInput = document.getElementById('q-file');
+  if (!fileInput.files[0]) {
+    setError(out, 'Please select an image first.');
+    return;
+  }
+
   const formData = new FormData(form);
   btn.disabled = true;
+  btn.textContent = 'Loading…';
+  setLoading(out, 'Running segmentation…');
+
+  try {
+    const res  = await fetch('/products/preview-segmentation', { method: 'POST', body: formData });
+    const json = await res.json();
+
+    if (!res.ok) {
+      setError(out, 'Error: ' + (json.detail ?? res.statusText));
+      btn.disabled = false;
+      btn.textContent = 'Preview Mask →';
+      return;
+    }
+
+    out.innerHTML = '';
+    initMaskEditor(json.original_img, json.mask_b64, 'query');
+    // btn stays disabled while editor is open; cancelMaskEditor() re-enables it
+  } catch (err) {
+    setError(out, 'Network error: ' + err.message);
+    btn.disabled = false;
+    btn.textContent = 'Preview Mask →';
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Query — step 2: run matching with the edited mask
+// ---------------------------------------------------------------------------
+
+async function confirmQuery() {
+  const confirmBtn = document.getElementById('mask-confirm-btn');
+  const out        = document.getElementById('query-result');
+  const form       = document.getElementById('query-form');
+
+  const fileInput = document.getElementById('q-file');
+  if (!fileInput.files[0]) {
+    setError(out, 'Image file is missing.');
+    return;
+  }
+
+  const maskB64   = getMaskBase64();
+  const topK      = form.querySelector('select[name="top_k"]').value;
+  const segMethod = form.querySelector('input[name="seg_method"]:checked').value;
+
+  confirmBtn.disabled = true;
+
+  // Show the query panel with a loading indicator before the fetch starts
+  cancelMaskEditor();
   setLoading(out, 'Searching…');
+  document.getElementById('q-submit').disabled = true;
+
+  const formData = new FormData();
+  formData.append('file', fileInput.files[0]);
+  formData.append('top_k', topK);
+  formData.append('seg_method', segMethod);
+  formData.append('mask_data', maskB64);
 
   try {
     const res  = await fetch('/products/query', { method: 'POST', body: formData });
@@ -419,43 +555,14 @@ document.getElementById('query-form').addEventListener('submit', async (e) => {
       return;
     }
 
-    if (!json.results || json.results.length === 0) {
-      out.innerHTML = '<p class="status-msg">No matches found.</p>';
-      return;
-    }
-
-    out.innerHTML = `
-      <div class="match-list">
-        ${json.results.map((r, i) => `
-          <div class="match-card">
-            <div class="match-card-header">
-              <h3>#${i + 1} — ${r.name}</h3>
-              <span class="score-badge ${scoreBadgeClass(r.score)}">
-                ${(r.score * 100).toFixed(1)}%
-              </span>
-            </div>
-            <div class="match-card-body">
-              <div class="match-img-section">
-                <div class="col-label">Keypoint match</div>
-                <img src="data:image/png;base64,${r.match_img}"
-                     alt="SIFT keypoint match visualization" />
-              </div>
-              <div class="match-bars-section">
-                <div class="col-label">Score breakdown</div>
-                <img src="data:image/png;base64,${r.score_bars_img}"
-                     alt="score breakdown bar chart" />
-              </div>
-            </div>
-          </div>
-        `).join('')}
-      </div>
-    `;
+    renderQueryResults(json, out);
   } catch (err) {
     setError(out, 'Network error: ' + err.message);
   } finally {
-    btn.disabled = false;
+    confirmBtn.disabled = false;
+    document.getElementById('q-submit').disabled = false;
   }
-});
+}
 
 // ---------------------------------------------------------------------------
 // Catalog
@@ -542,3 +649,11 @@ async function deleteProduct(id, btn) {
 
 wirePreview('reg-file', 'reg-preview', 'reg-preview-wrap', 'reg-drop');
 wirePreview('q-file',   'q-preview',   'q-preview-wrap',   'q-drop');
+
+document.getElementById('mask-confirm-btn').addEventListener('click', () => {
+  if (maskEditorContext === 'query') {
+    confirmQuery();
+  } else {
+    confirmRegister();
+  }
+});

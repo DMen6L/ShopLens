@@ -13,11 +13,12 @@ CREATE TABLE IF NOT EXISTS products (
 CREATE TABLE IF NOT EXISTS features (
     id              SERIAL PRIMARY KEY,
     product_id      INTEGER     NOT NULL REFERENCES products(id) ON DELETE CASCADE,
-    sift_desc       BYTEA,                  -- pickle-serialized numpy (N, 128) float32
+    orb_desc        BYTEA,                  -- pickle-serialized numpy (N, 32) uint8
     hist_hsv        BYTEA,                  -- pickle-serialized numpy (50, 60) float32
     hu_moments      DOUBLE PRECISION[],     -- 7-element log-Hu vector
     corner_density  DOUBLE PRECISION,       -- normalized Harris corner scalar
-    embedding       VECTOR(3000)            -- flattened, L2-normed HSV histogram for ANN
+    embedding       VECTOR(32),             -- L2-normed Fourier contour descriptor for shape-ANN
+    shape_geo       BYTEA                   -- pickle-serialized numpy (3,) float32: [solidity, elongation, extent]
 );
 
 CREATE INDEX IF NOT EXISTS features_product_id_idx ON features(product_id);

@@ -531,6 +531,15 @@ select:focus { border-color: var(--accent); }
   box-shadow: var(--shadow);
 }
 
+@keyframes mask-invert-flash {
+  0%   { filter: invert(0); }
+  30%  { filter: invert(1); }
+  100% { filter: invert(0); }
+}
+#mask-canvas.mask-invert-anim {
+  animation: mask-invert-flash 0.35s ease-out;
+}
+
 .canvas-hint {
   font-size: 0.75rem;
   color: var(--muted);

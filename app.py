@@ -218,6 +218,7 @@ async def query_products(
     file: UploadFile = File(...),
     top_k: int = Form(5),
     seg_method: str = Form("grabcut"),
+    mask_data: str | None = Form(None),
 ):
     """
     Find the top-k most similar registered products for a query image.
@@ -226,6 +227,8 @@ async def query_products(
       - file        : query image
       - top_k       : number of results to return (default 5)
       - seg_method  : "grabcut" (default) or "watershed"
+      - mask_data   : optional base64 PNG mask edited by the user (255=fg, 0=bg).
+                      When provided, auto-segmentation is skipped entirely.
 
     Returns:
       {
@@ -234,8 +237,8 @@ async def query_products(
             "product_id": <int>,
             "name": <str>,
             "score": <float 0–1>,
-            "breakdown": { "hist": f, "sift": f, "hu": f, "corner": f },
-            "match_img": "<base64 PNG — side-by-side with SIFT lines>",
+            "breakdown": { "contour": f, "hist": f, "orb": f, "hu": f, "corner": f },
+            "match_img": "<base64 PNG — side-by-side with ORB lines>",
             "score_bars_img": "<base64 PNG — confidence bar chart>"
           },
           ...
@@ -244,7 +247,21 @@ async def query_products(
     """
     raw = await file.read()
     query_img = _decode_image(raw)
-    mask, _ = _segment(query_img, seg_method)
+
+    if mask_data:
+        mask_bytes = base64.b64decode(mask_data)
+        mask_arr = np.frombuffer(mask_bytes, dtype=np.uint8)
+        mask = cv2.imdecode(mask_arr, cv2.IMREAD_GRAYSCALE)
+        if mask is None:
+            raise HTTPException(status_code=400, detail="Could not decode provided mask image")
+        if mask.shape[:2] != query_img.shape[:2]:
+            mask = cv2.resize(mask, (query_img.shape[1], query_img.shape[0]), interpolation=cv2.INTER_NEAREST)
+        _, mask = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
+        if np.count_nonzero(mask) == 0:
+            raise HTTPException(status_code=400, detail="Mask is empty — mark at least some foreground area")
+    else:
+        mask, _ = _segment(query_img, seg_method)
+
     query_features = pipeline.extract(query_img, mask)
 
     match_results = matcher.match(query_features, top_k=top_k)

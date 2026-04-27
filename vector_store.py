@@ -20,7 +20,7 @@ import numpy as np
 BACKEND = os.environ.get("VECTOR_BACKEND", "pgvector").lower()
 QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
 QDRANT_COLLECTION = "shoplens_products"
-EMBEDDING_DIM = 3000
+EMBEDDING_DIM = 32
 
 
 # ---------------------------------------------------------------------------
