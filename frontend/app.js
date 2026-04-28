@@ -23,6 +23,13 @@ const preprocessState = {
   q: 'none',
 };
 
+// Stores { value, label, image } arrays returned by the server, keyed by prefix
+const preprocessItems = {
+  reg: [],
+  av: [],
+  q: [],
+};
+
 // ---------------------------------------------------------------------------
 // Image preview & drag-and-drop
 // ---------------------------------------------------------------------------
@@ -97,16 +104,30 @@ async function loadPreprocessPreviews(prefix, file) {
       return;
     }
 
-    grid.innerHTML = json.methods.map(item => `
-      <button type="button"
-              class="preprocess-card ${item.value === preprocessState[prefix] ? 'active' : ''}"
-              data-prefix="${prefix}"
-              data-method="${item.value}"
-              onclick="selectPreprocess('${prefix}', '${item.value}')">
-        <img src="data:image/png;base64,${item.image}" alt="${item.label}" />
-        <span>${item.label}</span>
-      </button>
-    `).join('');
+    preprocessItems[prefix] = json.methods;
+
+    const active = preprocessState[prefix];
+    const activeItem = json.methods.find(m => m.value === active) || json.methods[0];
+
+    grid.innerHTML = `
+      <div class="preprocess-pills" id="${prefix}-preprocess-pills">
+        ${json.methods.map(item => `
+          <button type="button"
+                  class="preprocess-pill ${item.value === active ? 'active' : ''}"
+                  data-prefix="${prefix}"
+                  data-method="${item.value}"
+                  onclick="selectPreprocess('${prefix}', '${item.value}')">
+            ${item.label}
+          </button>
+        `).join('')}
+      </div>
+      <div class="preprocess-preview-wrap">
+        <img id="${prefix}-preprocess-preview"
+             src="data:image/png;base64,${activeItem.image}"
+             alt="${activeItem.label}" />
+        <span class="preprocess-preview-label" id="${prefix}-preprocess-label">${activeItem.label}</span>
+      </div>
+    `;
   } catch (err) {
     grid.innerHTML = `<div class="alert-error">Previews failed: ${err.message}</div>`;
   }
@@ -114,9 +135,16 @@ async function loadPreprocessPreviews(prefix, file) {
 
 function selectPreprocess(prefix, method) {
   preprocessState[prefix] = method;
-  document.querySelectorAll(`#${prefix}-preprocess-grid .preprocess-card`).forEach(card => {
-    card.classList.toggle('active', card.dataset.method === method);
+  document.querySelectorAll(`#${prefix}-preprocess-pills .preprocess-pill`).forEach(pill => {
+    pill.classList.toggle('active', pill.dataset.method === method);
   });
+  const item = preprocessItems[prefix].find(m => m.value === method);
+  if (item) {
+    const img   = document.getElementById(prefix + '-preprocess-preview');
+    const label = document.getElementById(prefix + '-preprocess-label');
+    if (img)   img.src = 'data:image/png;base64,' + item.image;
+    if (label) label.textContent = item.label;
+  }
 }
 
 // ---------------------------------------------------------------------------

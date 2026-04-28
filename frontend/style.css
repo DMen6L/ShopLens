@@ -229,40 +229,68 @@ select:focus { border-color: var(--accent); }
   letter-spacing: 0.5px;
 }
 .preprocess-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
-  gap: 0.65rem;
-}
-.preprocess-card {
   display: flex;
   flex-direction: column;
+  gap: 0.65rem;
+}
+
+/* pill selector row */
+.preprocess-pills {
+  display: flex;
+  flex-wrap: wrap;
   gap: 0.45rem;
+}
+.preprocess-pill {
+  padding: 0.3rem 0.85rem;
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: 99px;
   background: var(--surface);
-  padding: 0.45rem;
-  color: var(--text);
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 500;
   cursor: pointer;
-  text-align: left;
-  transition: border-color 0.15s, box-shadow 0.15s;
+  transition: border-color 0.15s, color 0.15s, background 0.15s, box-shadow 0.15s;
+  white-space: nowrap;
 }
-.preprocess-card:hover { border-color: var(--accent); }
-.preprocess-card.active {
+.preprocess-pill:hover {
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px rgba(233, 69, 96, 0.16);
+  color: var(--accent);
 }
-.preprocess-card img {
+.preprocess-pill.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: transparent;
+  box-shadow: 0 0 0 2px rgba(233, 69, 96, 0.18);
+}
+
+/* large single preview */
+.preprocess-preview-wrap {
+  position: relative;
+  display: inline-block;
   width: 100%;
-  aspect-ratio: 4 / 3;
-  object-fit: cover;
-  border-radius: 4px;
+}
+.preprocess-preview-wrap img {
+  width: 100%;
+  max-height: 340px;
+  object-fit: contain;
+  border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--bg);
+  display: block;
+  transition: opacity 0.15s;
 }
-.preprocess-card span {
-  font-size: 0.78rem;
+.preprocess-preview-label {
+  position: absolute;
+  bottom: 8px;
+  left: 10px;
+  background: rgba(0,0,0,0.55);
+  color: #fff;
+  font-size: 0.75rem;
   font-weight: 600;
-  line-height: 1.25;
+  padding: 0.2rem 0.55rem;
+  border-radius: 99px;
+  pointer-events: none;
+  letter-spacing: 0.3px;
 }
 
 /* ── Segmentation radio ─────────────────────────────────────────────────── */
