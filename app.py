@@ -5,11 +5,12 @@ Phase 6: Full API endpoints for product registration and querying.
 
 Endpoints
 ---------
-GET  /health                  — liveness probe
-GET  /products                — list all products (metadata only)
-POST /products/register       — register a new product with image upload
-POST /products/query          — find similar products for a query image
-DELETE /products/{product_id} — remove a product
+GET  /health                       — liveness probe
+GET  /products                     — list all products (metadata only)
+POST /products/register            — register a new product (first view)
+POST /products/{product_id}/views  — add an additional view to an existing product
+POST /products/query               — find similar products for a query image
+DELETE /products/{product_id}      — remove a product and all its views
 """
 
 import base64
@@ -200,11 +201,71 @@ async def register_product(
         mask, masked_img = _segment(img, seg_method)
 
     features = pipeline.extract(img, mask)
-    product_id = db.add(name, features, image_data=raw)
-    vs.upsert(product_id, features["embedding"])
+    product_id = db.create_product(name, image_data=raw)
+    feature_id = db.add_view(product_id, features, view_image_data=raw)
+    vs.upsert(feature_id, product_id, features["embedding"])
 
     return {
         "product_id": product_id,
+        "masked_img": _encode_png(masked_img),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Products — add view to existing product
+# ---------------------------------------------------------------------------
+
+@app.post("/products/{product_id}/views", status_code=201)
+async def add_product_view(
+    product_id: int,
+    file: UploadFile = File(...),
+    seg_method: str = Form("grabcut"),
+    mask_data: str | None = Form(None),
+):
+    """
+    Add an additional view (angle/lighting condition) to an existing product.
+
+    Multipart form fields:
+      - file        : image file for this view
+      - seg_method  : "grabcut" (default) or "watershed"
+      - mask_data   : optional base64 PNG mask
+
+    Returns:
+      {
+        "product_id": <int>,
+        "view_id":    <int>,
+        "masked_img": "<base64 PNG of the segmented foreground>"
+      }
+    """
+    # Verify the product exists
+    if db.get_by_id(product_id) is None:
+        raise HTTPException(status_code=404, detail=f"Product {product_id} not found")
+
+    raw = await file.read()
+    img = _decode_image(raw)
+
+    if mask_data:
+        mask_bytes = base64.b64decode(mask_data)
+        mask_arr = np.frombuffer(mask_bytes, dtype=np.uint8)
+        mask = cv2.imdecode(mask_arr, cv2.IMREAD_GRAYSCALE)
+        if mask is None:
+            raise HTTPException(status_code=400, detail="Could not decode provided mask image")
+        if mask.shape[:2] != img.shape[:2]:
+            mask = cv2.resize(mask, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_NEAREST)
+        _, mask = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
+        if np.count_nonzero(mask) == 0:
+            raise HTTPException(status_code=400, detail="Mask is empty — mark at least some foreground area")
+        masked_img = cv2.bitwise_and(img, img, mask=mask)
+    else:
+        mask, masked_img = _segment(img, seg_method)
+
+    features = pipeline.extract(img, mask)
+    feature_id = db.add_view(product_id, features, view_image_data=raw)
+    vs.upsert(feature_id, product_id, features["embedding"])
+
+    return {
+        "product_id": product_id,
+        "view_id":    feature_id,
         "masked_img": _encode_png(masked_img),
     }
 
@@ -237,8 +298,8 @@ async def query_products(
             "product_id": <int>,
             "name": <str>,
             "score": <float 0–1>,
-            "breakdown": { "contour": f, "hist": f, "orb": f, "hu": f, "corner": f },
-            "match_img": "<base64 PNG — side-by-side with ORB lines>",
+            "breakdown": { "contour": f, "hist": f, "sift": f, "hu": f, "corner": f },
+            "match_img": "<base64 PNG — side-by-side with SIFT lines>",
             "score_bars_img": "<base64 PNG — confidence bar chart>"
           },
           ...
@@ -268,12 +329,12 @@ async def query_products(
 
     output = []
     for r in match_results:
-        # Retrieve stored image for visualization
-        candidate_row = db.get_by_id(r.product_id)
+        # Retrieve the best-matching view's image for visualization
         candidate_img = None
-        if candidate_row and candidate_row.get("image_data"):
+        view_img_bytes = db.get_view_image(r.view_id) if r.view_id else None
+        if view_img_bytes:
             try:
-                candidate_img = _decode_image(bytes(candidate_row["image_data"]))
+                candidate_img = _decode_image(view_img_bytes)
             except HTTPException:
                 pass
 

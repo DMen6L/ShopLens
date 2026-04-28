@@ -14,6 +14,7 @@ function switchTab(name) {
   document.getElementById('panel-' + name).classList.remove('hidden');
   document.getElementById('tab-' + name).classList.add('active');
   if (name === 'products') loadCatalog();
+  if (name === 'addview')  loadProductSelector();
 }
 
 // ---------------------------------------------------------------------------
@@ -98,7 +99,11 @@ let brushSize      = 16;
 let isPainting     = false;
 let overlayCanvas  = null;   // reused offscreen canvas for compositing
 let canvasEventsWired = false;
-let maskEditorContext = 'register';  // 'register' | 'query'
+let maskEditorContext = 'register';  // 'register' | 'query' | 'addview'
+
+// Preserved after a query so the "add as view" prompt can reuse them
+let lastQueryFile    = null;
+let lastQueryMaskB64 = null;
 
 // ---------------------------------------------------------------------------
 // Mask editor — init
@@ -134,20 +139,26 @@ function initMaskEditor(origImgB64, maskB64, context) {
       renderMaskCanvas();
 
       // Update subtitle and confirm button text to match the current context
-      const isQuery = maskEditorContext === 'query';
-      document.getElementById('mask-editor-sub').textContent = isQuery
-        ? 'Paint to fix foreground / background before searching.'
-        : 'Paint to fix foreground / background before registering.';
-      document.getElementById('mask-confirm-btn').textContent = isQuery
-        ? 'Search →'
-        : 'Register Product';
+      const subtitles = {
+        query:    'Paint to fix foreground / background before searching.',
+        register: 'Paint to fix foreground / background before registering.',
+        addview:  'Paint to fix foreground / background before adding the view.',
+      };
+      const confirmLabels = {
+        query:    'Search →',
+        register: 'Register Product',
+        addview:  'Add View',
+      };
+      document.getElementById('mask-editor-sub').textContent = subtitles[maskEditorContext] || subtitles.register;
+      document.getElementById('mask-confirm-btn').textContent = confirmLabels[maskEditorContext] || 'Confirm';
 
       // Hide the active panel and show the editor in its place
-      document.getElementById('panel-' + (isQuery ? 'query' : 'register')).classList.add('hidden');
+      document.getElementById('panel-' + maskEditorContext).classList.add('hidden');
       document.getElementById('mask-editor').classList.remove('hidden');
 
       // Clear any stale result from the active panel
-      document.getElementById(isQuery ? 'query-result' : 'register-result').innerHTML = '';
+      const resultIds = { query: 'query-result', register: 'register-result', addview: 'addview-result' };
+      document.getElementById(resultIds[maskEditorContext] || 'register-result').innerHTML = '';
     };
     maskImg.src = 'data:image/png;base64,' + maskB64;
   };
@@ -319,11 +330,11 @@ function getMaskBase64() {
 
 function cancelMaskEditor() {
   document.getElementById('mask-editor').classList.add('hidden');
-  const isQuery = maskEditorContext === 'query';
   // Restore the panel that was hidden when the editor opened
-  document.getElementById(isQuery ? 'panel-query' : 'panel-register').classList.remove('hidden');
+  document.getElementById('panel-' + maskEditorContext).classList.remove('hidden');
   // Re-enable the submit button that triggered the editor
-  const btn = document.getElementById(isQuery ? 'q-submit' : 'reg-submit');
+  const submitIds = { query: 'q-submit', register: 'reg-submit', addview: 'av-submit' };
+  const btn = document.getElementById(submitIds[maskEditorContext] || 'reg-submit');
   btn.disabled = false;
   btn.textContent = 'Preview Mask →';
 }
@@ -530,6 +541,8 @@ async function confirmQuery() {
   }
 
   const maskB64   = getMaskBase64();
+  lastQueryFile    = fileInput.files[0];
+  lastQueryMaskB64 = maskB64;
   const topK      = form.querySelector('select[name="top_k"]').value;
   const segMethod = form.querySelector('input[name="seg_method"]:checked').value;
 
@@ -556,6 +569,16 @@ async function confirmQuery() {
     }
 
     renderQueryResults(json, out);
+
+    // Prompt to register query image as a new view when the top match is
+    // "good but not perfect" — meaning the product is recognised but this
+    // angle isn't stored yet.  Thresholds: 70 % ≤ score < 97 %.
+    if (json.results && json.results.length > 0) {
+      const top = json.results[0];
+      if (top.score >= 0.70 && top.score < 0.97) {
+        _prependAddViewBanner(top, out);
+      }
+    }
   } catch (err) {
     setError(out, 'Network error: ' + err.message);
   } finally {
@@ -644,16 +667,201 @@ async function deleteProduct(id, btn) {
 }
 
 // ---------------------------------------------------------------------------
+// Add-as-view prompt (shown after a query when top score is 70 %–97 %)
+// ---------------------------------------------------------------------------
+
+function _prependAddViewBanner(topResult, container) {
+  const pct  = (topResult.score * 100).toFixed(1);
+  const wrap = document.createElement('div');
+  wrap.className = 'add-view-banner';
+  wrap.innerHTML = `
+    <span class="add-view-msg">
+      Looks like <strong>${topResult.name}</strong> (${pct}%) — but not a perfect match.
+      Is this a new angle of the same product?
+    </span>
+    <button class="btn-primary add-view-banner-btn"
+            onclick="addQueryAsView(${topResult.product_id}, this)">
+      Add as new view
+    </button>
+  `;
+  container.prepend(wrap);
+}
+
+async function addQueryAsView(productId, btn) {
+  if (!lastQueryFile || !lastQueryMaskB64) {
+    alert('Query image is no longer available — run a new search first.');
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Adding…';
+
+  const formData = new FormData();
+  formData.append('file', lastQueryFile);
+  formData.append('mask_data', lastQueryMaskB64);
+
+  try {
+    const res  = await fetch(`/products/${productId}/views`, { method: 'POST', body: formData });
+    const json = await res.json();
+
+    const banner = btn.closest('.add-view-banner');
+    if (res.ok) {
+      banner.className = 'add-view-banner add-view-banner--done';
+      banner.innerHTML = `
+        <span class="add-view-msg">
+          View added (id&nbsp;${json.view_id}) — this angle will improve future matches.
+        </span>`;
+    } else {
+      btn.disabled = false;
+      btn.textContent = 'Add as new view';
+      alert('Error: ' + (json.detail ?? res.statusText));
+    }
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = 'Add as new view';
+    alert('Network error: ' + err.message);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Add View — load product selector
+// ---------------------------------------------------------------------------
+
+async function loadProductSelector() {
+  const sel = document.getElementById('av-product');
+  try {
+    const res  = await fetch('/products');
+    const rows = await res.json();
+    // Remove all options except the placeholder
+    while (sel.options.length > 1) sel.remove(1);
+    if (!Array.isArray(rows) || rows.length === 0) return;
+    rows.forEach(r => {
+      const opt = document.createElement('option');
+      opt.value = r.id;
+      opt.textContent = `#${r.id} — ${r.name}`;
+      sel.appendChild(opt);
+    });
+  } catch (_) { /* silently ignore */ }
+}
+
+// ---------------------------------------------------------------------------
+// Add View — step 1: preview segmentation
+// ---------------------------------------------------------------------------
+
+document.getElementById('addview-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+
+  const form = e.target;
+  const out  = document.getElementById('addview-result');
+  const btn  = document.getElementById('av-submit');
+
+  const fileInput   = document.getElementById('av-file');
+  const productSel  = document.getElementById('av-product');
+  if (!productSel.value) {
+    setError(out, 'Please select a product first.');
+    return;
+  }
+  if (!fileInput.files[0]) {
+    setError(out, 'Please select an image first.');
+    return;
+  }
+
+  const formData = new FormData();
+  formData.append('file', fileInput.files[0]);
+  formData.append('seg_method', form.querySelector('input[name="seg_method"]:checked').value);
+
+  btn.disabled = true;
+  btn.textContent = 'Loading…';
+  setLoading(out, 'Running segmentation…');
+
+  try {
+    const res  = await fetch('/products/preview-segmentation', { method: 'POST', body: formData });
+    const json = await res.json();
+
+    if (!res.ok) {
+      setError(out, 'Error: ' + (json.detail ?? res.statusText));
+      btn.disabled = false;
+      btn.textContent = 'Preview Mask →';
+      return;
+    }
+
+    out.innerHTML = '';
+    initMaskEditor(json.original_img, json.mask_b64, 'addview');
+  } catch (err) {
+    setError(out, 'Network error: ' + err.message);
+    btn.disabled = false;
+    btn.textContent = 'Preview Mask →';
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Add View — step 2: confirm with edited mask
+// ---------------------------------------------------------------------------
+
+async function confirmAddView() {
+  const btn       = document.getElementById('mask-confirm-btn');
+  const out       = document.getElementById('addview-result');
+  const form      = document.getElementById('addview-form');
+  const productId = document.getElementById('av-product').value;
+  const fileInput = document.getElementById('av-file');
+  const segMethod = form.querySelector('input[name="seg_method"]:checked').value;
+
+  if (!productId || !fileInput.files[0]) {
+    setError(out, 'Product or image missing.');
+    return;
+  }
+
+  const formData = new FormData();
+  formData.append('file', fileInput.files[0]);
+  formData.append('seg_method', segMethod);
+  formData.append('mask_data', getMaskBase64());
+
+  btn.disabled = true;
+  setLoading(out, 'Adding view…');
+
+  try {
+    const res  = await fetch(`/products/${productId}/views`, { method: 'POST', body: formData });
+    const json = await res.json();
+
+    if (!res.ok) {
+      setError(out, 'Error: ' + (json.detail ?? res.statusText));
+      return;
+    }
+
+    cancelMaskEditor();
+    const productLabel = document.getElementById('av-product').selectedOptions[0]?.textContent ?? `#${productId}`;
+    out.innerHTML = `
+      <div class="alert-success">
+        View added to <strong>${productLabel}</strong> —
+        <span class="reg-id">view id ${json.view_id}</span>
+      </div>
+      ${json.masked_img ? `
+        <p class="mask-label">Segmented foreground</p>
+        <img class="mask-preview"
+             src="data:image/png;base64,${json.masked_img}"
+             alt="segmented foreground" />
+      ` : ''}
+    `;
+    out.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    form.reset();
+    clearPreview('av');
+  } catch (err) {
+    setError(out, 'Network error: ' + err.message);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Init
 // ---------------------------------------------------------------------------
 
 wirePreview('reg-file', 'reg-preview', 'reg-preview-wrap', 'reg-drop');
+wirePreview('av-file',  'av-preview',  'av-preview-wrap',  'av-drop');
 wirePreview('q-file',   'q-preview',   'q-preview-wrap',   'q-drop');
 
 document.getElementById('mask-confirm-btn').addEventListener('click', () => {
-  if (maskEditorContext === 'query') {
-    confirmQuery();
-  } else {
-    confirmRegister();
-  }
+  if (maskEditorContext === 'query')   confirmQuery();
+  else if (maskEditorContext === 'addview') confirmAddView();
+  else confirmRegister();
 });

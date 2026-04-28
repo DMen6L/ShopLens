@@ -581,3 +581,22 @@ select:focus { border-color: var(--accent); }
   transition: border-color 0.15s, color 0.15s;
 }
 .btn-ghost-sm:hover { border-color: var(--accent); color: var(--accent); }
+
+/* Add-as-view prompt banner */
+.add-view-banner {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  background: #fffbea;
+  border: 1px solid #f0c040;
+  border-radius: var(--radius);
+  padding: 0.85rem 1.1rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+.add-view-banner--done {
+  background: #f0faf0;
+  border-color: #6bbf6b;
+}
+.add-view-msg { flex: 1; font-size: 0.92rem; color: #555; }
+.add-view-banner-btn { white-space: nowrap; }

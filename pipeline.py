@@ -10,7 +10,7 @@ Feature groups
    Invariant to translation, scale, rotation, and contour start-point.
    Captures whole-object silhouette; ignores interior texture / logos.
 
-2. ORB descriptors             — (N, 32) uint8, optional structural evidence
+2. SIFT descriptors            — (N, 128) float32, optional structural evidence
 3. 2D HSV histogram            — (50, 60) H×S bins, normalized; color signal
 4. Hu moments                  — (7,) log-transformed for L2 stability
 5. Harris corner density       — scalar float, texture density tie-breaker
@@ -24,11 +24,11 @@ import numpy as np
 _H_BINS = 50
 _S_BINS = 60
 
-# ORB: cap descriptors at this many to keep storage bounded
-_MAX_ORB_KP = 500
+# SIFT: cap descriptors at this many to keep storage bounded
+_MAX_SIFT_KP = 500
 
 # Boundary ring: fraction of the foreground region's estimated radius used as
-# ring thickness when masking ORB / Harris to the product outline.
+# ring thickness when masking SIFT / Harris to the product outline.
 # Keeps detectors on the structural silhouette and away from interior logos.
 _BOUNDARY_RING_FRACTION = 0.18
 
@@ -46,7 +46,7 @@ _FOURIER_N_COEFFS = 32
 
 class FeaturePipeline:
     def __init__(self):
-        self._orb = cv2.ORB_create(nfeatures=_MAX_ORB_KP)
+        self._sift = cv2.SIFT_create(nfeatures=_MAX_SIFT_KP)
 
     # ------------------------------------------------------------------
     # Public
@@ -67,15 +67,15 @@ class FeaturePipeline:
         dict with keys:
             embedding      np.ndarray (32,)    float32  — L2-normed Fourier shape descriptor
                                                           (used for ANN search)
-            orb_kp         list[cv2.KeyPoint]  — keypoints (needed by matcher RANSAC)
-            orb_desc       np.ndarray (N, 32) uint8  or None if no kp found
+            sift_kp        list[cv2.KeyPoint]  — keypoints (needed by matcher RANSAC)
+            sift_desc      np.ndarray (N, 128) float32  or None if no kp found
             hist_hsv       np.ndarray (50, 60) float32
             hu_moments     np.ndarray (7,)     float64
             corner_density float
             shape_geo      np.ndarray (3,)     float32  — L2-normed [solidity, elongation, extent]
         """
         embedding = self._compute_contour_fourier(img, mask)
-        orb_kp, orb_desc = self._compute_orb(img, mask)
+        sift_kp, sift_desc = self._compute_sift(img, mask)
         hist_hsv = self._compute_hsv_histogram(img, mask)
         hu_moments = self._compute_hu_moments(img, mask)
         corner_density = self._compute_corner_density(img, mask)
@@ -83,8 +83,8 @@ class FeaturePipeline:
 
         return {
             "embedding":      embedding,      # 32-dim Fourier shape — ANN key
-            "orb_kp":         orb_kp,         # list[KeyPoint] — used for RANSAC
-            "orb_desc":       orb_desc,
+            "sift_kp":        sift_kp,        # list[KeyPoint] — used for RANSAC
+            "sift_desc":      sift_desc,
             "hist_hsv":       hist_hsv,
             "hu_moments":     hu_moments,
             "corner_density": corner_density,
@@ -145,11 +145,11 @@ class FeaturePipeline:
             mags = mags / norm
         return mags
 
-    def _compute_orb(
+    def _compute_sift(
         self, img: np.ndarray, mask: np.ndarray | None
     ) -> tuple[list, np.ndarray | None]:
         """
-        Detect ORB keypoints and compute binary descriptors.
+        Detect SIFT keypoints and compute float32 descriptors (128-dim).
 
         When a foreground mask is available, detection is restricted to a
         boundary ring around the product silhouette.  This keeps keypoints
@@ -157,8 +157,8 @@ class FeaturePipeline:
         are high-contrast and would otherwise dominate the descriptor set.
         """
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        orb_mask = _boundary_ring_mask(mask) if mask is not None else None
-        kp, desc = self._orb.detectAndCompute(gray, orb_mask)
+        sift_mask = _boundary_ring_mask(mask) if mask is not None else None
+        kp, desc = self._sift.detectAndCompute(gray, sift_mask)
         if desc is None or len(kp) == 0:
             return [], None
         return kp, desc
@@ -328,7 +328,7 @@ def _boundary_ring_mask(mask: np.ndarray) -> np.ndarray:
     Return a ring-shaped mask covering only the outer band of the foreground.
 
     The ring width is proportional to the estimated radius of the foreground
-    blob (_BOUNDARY_RING_FRACTION * sqrt(area / π)).  This keeps ORB
+    blob (_BOUNDARY_RING_FRACTION * sqrt(area / π)).  This keeps SIFT
     keypoints and Harris corners on the structural silhouette of the product
     and away from the interior, where logos generate misleading high-contrast
     features.

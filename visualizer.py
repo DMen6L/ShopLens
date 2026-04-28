@@ -2,8 +2,8 @@
 visualizer.py — Visualization utilities for ShopLens match results.
 
 Two outputs (both returned as base64-encoded PNG strings):
-  1. draw_matches()    — side-by-side query/candidate with ORB keypoint lines
-  2. draw_score_bars() — horizontal confidence bar chart (hist / orb / hu / corner)
+  1. draw_matches()    — side-by-side query/candidate with SIFT keypoint lines
+  2. draw_score_bars() — horizontal confidence bar chart (hist / sift / hu / corner)
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ def draw_matches(
     target_height: int = 400,
 ) -> str:
     """
-    Detect ORB keypoints on both images and draw good matches between them.
+    Detect SIFT keypoints on both images and draw good matches between them.
 
     Falls back to a plain side-by-side view when either image yields no
     descriptors (e.g. blank / very small images).
@@ -46,14 +46,14 @@ def draw_matches(
     q = _resize_to_height(query_img, target_height)
     c = _resize_to_height(candidate_img, target_height)
 
-    orb = cv2.ORB_create(nfeatures=500)
-    kp_q, desc_q = orb.detectAndCompute(cv2.cvtColor(q, cv2.COLOR_BGR2GRAY), None)
-    kp_c, desc_c = orb.detectAndCompute(cv2.cvtColor(c, cv2.COLOR_BGR2GRAY), None)
+    sift = cv2.SIFT_create(nfeatures=500)
+    kp_q, desc_q = sift.detectAndCompute(cv2.cvtColor(q, cv2.COLOR_BGR2GRAY), None)
+    kp_c, desc_c = sift.detectAndCompute(cv2.cvtColor(c, cv2.COLOR_BGR2GRAY), None)
 
     if desc_q is None or desc_c is None or len(kp_q) < 2 or len(kp_c) < 2:
         out = _side_by_side(q, c)
     else:
-        bf = cv2.BFMatcher(cv2.NORM_HAMMING)
+        bf = cv2.BFMatcher(cv2.NORM_L2)
         raw = bf.knnMatch(desc_q, desc_c, k=2)
         good = [m for m, n in raw if m.distance < 0.75 * n.distance]
         good = sorted(good, key=lambda m: m.distance)[:max_matches]
@@ -74,7 +74,7 @@ def draw_score_bars(result: MatchResult, title: str | None = None) -> str:
 
     Each bar is color-coded by component:
         hist   — blue
-        orb    — green
+        sift   — green
         hu     — orange
         corner — purple
 
@@ -99,7 +99,7 @@ def draw_score_bars(result: MatchResult, title: str | None = None) -> str:
 _BAR_COLORS: dict[str, tuple[int, int, int]] = {
     "contour":   ( 20, 180,  80),   # teal    — primary shape channel
     "hist":      (200,  80,  20),   # blue-ish
-    "orb":       ( 40, 160,  40),   # green
+    "sift":      ( 40, 160,  40),   # green
     "hu":        ( 20, 140, 220),   # orange
     "corner":    (160,  40, 160),   # purple
     "shape_geo": ( 30, 100, 220),   # amber   — solidity/elongation/extent
@@ -109,7 +109,7 @@ _BAR_COLORS: dict[str, tuple[int, int, int]] = {
 _LABELS = {
     "contour":   "Shape (Fourier)",
     "hist":      "Color (HSV)",
-    "orb":       "ORB",
+    "sift":      "SIFT",
     "hu":        "Shape (Hu)",
     "corner":    "Corners",
     "shape_geo": "Shape Geo",
@@ -127,7 +127,7 @@ _FONT        = cv2.FONT_HERSHEY_SIMPLEX
 
 
 def _build_score_canvas(result: MatchResult, title: str | None) -> np.ndarray:
-    components = ["contour", "hist", "hu", "shape_geo", "bow", "orb", "corner"]
+    components = ["contour", "hist", "hu", "shape_geo", "bow", "sift", "corner"]
     n = len(components)
     canvas_h = _PAD + _HEADER_H + n * (_BAR_H + _ROW_GAP) + _PAD
 

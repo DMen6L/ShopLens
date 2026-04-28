@@ -15,6 +15,7 @@
       </div>
       <nav>
         <button id="tab-register" class="tab active" onclick="switchTab('register')">Register</button>
+        <button id="tab-addview"  class="tab"        onclick="switchTab('addview')">Add View</button>
         <button id="tab-query"    class="tab"        onclick="switchTab('query')">Find</button>
         <button id="tab-products" class="tab"        onclick="switchTab('products')">Catalog</button>
       </nav>
@@ -68,6 +69,54 @@
       </form>
 
       <div id="register-result" class="result"></div>
+    </section>
+
+    <!-- ── Add View panel ────────────────────────────────────────────── -->
+    <section id="panel-addview" class="panel hidden">
+      <div class="panel-header">
+        <h2>Add a View</h2>
+        <p class="panel-sub">Upload a new angle/image for an already-registered product.</p>
+      </div>
+
+      <form id="addview-form">
+        <div class="field">
+          <label for="av-product">Product</label>
+          <select id="av-product" name="product_id" required>
+            <option value="">— select a product —</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label>Image</label>
+          <div class="file-drop" id="av-drop">
+            <input type="file" name="file" id="av-file" accept="image/*" required />
+            <div class="file-drop-label">
+              <span class="file-drop-icon">↑</span>
+              <span>Drop image here or <u>browse</u></span>
+            </div>
+          </div>
+          <div class="img-preview-wrap hidden" id="av-preview-wrap">
+            <img id="av-preview" alt="preview" />
+            <button type="button" class="clear-btn" onclick="clearPreview('av')">✕</button>
+          </div>
+        </div>
+
+        <div class="field field-row">
+          <label>Segmentation</label>
+          <div class="seg-opts">
+            <label class="radio-opt">
+              <input type="radio" name="seg_method" value="grabcut" checked /> GrabCut
+            </label>
+            <label class="radio-opt">
+              <input type="radio" name="seg_method" value="watershed" /> Watershed
+            </label>
+          </div>
+        </div>
+
+        <button type="submit" class="btn-primary" id="av-submit">Preview Mask →</button>
+      </form>
+
+      <div id="addview-result" class="result"></div>
     </section>
 
     <!-- ── Query panel ────────────────────────────────────────────────── -->

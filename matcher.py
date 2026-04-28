@@ -14,7 +14,7 @@ Flow
        w_contour * contour_sim   (Fourier shape descriptor — primary)
      + w_hu      * hu_sim        (Hu moments — secondary shape)
      + w_hist    * hist_sim      (HSV colour histogram — secondary)
-     + w_orb     * orb_sim       (ORB + RANSAC — optional structural)
+     + w_sift    * sift_sim      (SIFT + RANSAC — optional structural)
      + w_corner  * corner_sim    (Harris corner density — tie-breaker)
 
 Weights (default)
@@ -22,7 +22,7 @@ Weights (default)
     contour  0.50  — whole-object Fourier silhouette (primary discriminator)
     hu       0.17  — Hu moment shape (complements Fourier)
     hist     0.25  — colour (useful but not allowed to dominate)
-    orb      0.05  — boundary-ring ORB; logo-suppressed structural evidence
+    sift     0.05  — boundary-ring SIFT; logo-suppressed structural evidence
     corner   0.03  — boundary-ring Harris density (tie-breaker only)
 
 All individual similarity scores are in [0, 1] (1 = identical).
@@ -61,11 +61,12 @@ class MatchResult:
     score: float                          # weighted final score [0, 1]
     contour_sim: float                    # Fourier shape descriptor similarity [0, 1]
     hist_sim: float                       # HSV histogram similarity [0, 1]
-    orb_sim: float                        # ORB match ratio [0, 1]
+    sift_sim: float                       # SIFT match ratio [0, 1]
     hu_sim: float                         # Hu-moment similarity [0, 1]
     corner_sim: float                     # corner-density similarity [0, 1]
     shape_geo_sim: float = 0.0            # shape geometry similarity [0, 1]
     bow_sim: float = 0.0                  # Bag-of-Visual-Words similarity [0, 1]
+    view_id: int = 0                      # features.id of the best-matching view
     name: str = ""                        # filled in by Matcher if DB row available
     breakdown: dict[str, float] = field(default_factory=dict)
 
@@ -73,7 +74,7 @@ class MatchResult:
         self.breakdown = {
             "contour":   self.contour_sim,
             "hist":      self.hist_sim,
-            "orb":       self.orb_sim,
+            "sift":      self.sift_sim,
             "hu":        self.hu_sim,
             "corner":    self.corner_sim,
             "shape_geo": self.shape_geo_sim,
@@ -91,18 +92,18 @@ class Matcher:
     ----------
     db          : ProductDB instance (used to fetch candidate features)
     vector_store: VectorStore instance (used for ANN shortlist)
-    weights     : dict with keys contour/hist/orb/hu/corner — must sum to 1.0
+    weights     : dict with keys contour/hist/sift/hu/corner — must sum to 1.0
     ann_factor  : how many extra candidates to fetch before re-ranking
                   (top_k * ann_factor vectors are retrieved from ANN)
     """
 
     _DEFAULT_WEIGHTS = {
         "contour":   0.13,  # Fourier shape — global silhouette; logo-blind
-        "hist":      0.18,  # colour — secondary; must not dominate
-        "hu":        0.12,  # Hu moments — secondary shape
-        "shape_geo": 0.38,  # solidity/elongation/extent — primary shape discriminator
-        "bow":       0.12,  # Bag-of-Visual-Words — local texture patterns (saw teeth, ribbing, etc.)
-        "orb":       0.04,  # ORB boundary-ring RANSAC — structural evidence
+        "hist":      0.12,  # colour — tertiary; must not dominate
+        "hu":        0.38,  # Hu moments — primary shape discriminator
+        "shape_geo": 0.18,  # solidity/elongation/extent — secondary shape
+        "bow":       0.12,  # Bag-of-Visual-Words — local texture patterns
+        "sift":      0.04,  # SIFT boundary-ring RANSAC — structural evidence
         "corner":    0.03,  # corner density — tie-breaker only
     }
 
@@ -118,8 +119,8 @@ class Matcher:
         self._w = weights or self._DEFAULT_WEIGHTS
         self._ann_factor = ann_factor
 
-        # BFMatcher for ORB (Hamming distance + kNN for Lowe ratio test)
-        self._bf = cv2.BFMatcher(cv2.NORM_HAMMING)
+        # BFMatcher for SIFT (L2 distance + kNN for Lowe ratio test)
+        self._bf = cv2.BFMatcher(cv2.NORM_L2)
 
     # ------------------------------------------------------------------
     # Public
@@ -142,7 +143,7 @@ class Matcher:
         -------
         List of MatchResult sorted by score descending (best first).
         """
-        # 1. ANN candidate shortlist (shape-based)
+        # 1. ANN candidate shortlist (shape-based, deduplicated by product_id)
         candidates_ann = self._vs.search(
             query_features["embedding"],
             top_k=top_k * self._ann_factor,
@@ -152,30 +153,35 @@ class Matcher:
 
         candidate_ids = [pid for pid, _ in candidates_ann]
 
-        # 2. Fetch full features for each candidate
-        candidate_rows = {}
+        # 2. Fetch ALL views for each candidate product
+        candidate_rows: dict[int, list] = {}
         for pid in candidate_ids:
-            row = self._db.get_by_id(pid)
-            if row is not None:
-                candidate_rows[pid] = row
+            views = self._db.get_views(pid)
+            if views:
+                candidate_rows[pid] = views
 
-        # 3. Build BoVW vocabulary on-the-fly from query + all candidate ORB descriptors.
-        #    Using candidates-only vocab means no persistent file and no staleness issues.
-        all_descs_for_vocab = [query_features.get("orb_desc")]
-        for row in candidate_rows.values():
-            all_descs_for_vocab.append(row.get("orb_desc"))
+        # 3. Build BoVW vocabulary on-the-fly from query + all views of all candidates.
+        all_descs_for_vocab = [query_features.get("sift_desc")]
+        for views in candidate_rows.values():
+            for v in views:
+                all_descs_for_vocab.append(v.get("sift_desc"))
         vocab = _build_bow_vocab(all_descs_for_vocab, k=_BOW_K)
 
-        query_bow = _encode_bow(query_features.get("orb_desc"), vocab)
+        query_bow = _encode_bow(query_features.get("sift_desc"), vocab)
 
-        # 4. Score each candidate
+        # 4. Score each view per product; keep the best-scoring view per product
         results: list[MatchResult] = []
-        for pid, row in candidate_rows.items():
-            cand_bow = _encode_bow(row.get("orb_desc"), vocab)
-            r = self._score_pair(query_features, row, query_bow=query_bow, cand_bow=cand_bow)
-            r.product_id = pid
-            r.name = row.get("name", "")
-            results.append(r)
+        for pid, views in candidate_rows.items():
+            best: MatchResult | None = None
+            for view in views:
+                view_bow = _encode_bow(view.get("sift_desc"), vocab)
+                r = self._score_pair(query_features, view, query_bow=query_bow, cand_bow=view_bow)
+                if best is None or r.score > best.score:
+                    best = r
+                    best.view_id = view["view_id"]
+            best.product_id = pid
+            best.name = views[0].get("name", "")
+            results.append(best)
 
         # 5. Sort by final score descending and return top_k
         results.sort(key=lambda r: r.score, reverse=True)
@@ -194,9 +200,9 @@ class Matcher:
     ) -> MatchResult:
         contour_sim   = _fourier_similarity(q["embedding"],        c["embedding"])
         hist_sim      = _hist_similarity(q["hist_hsv"],            c["hist_hsv"])
-        orb_sim       = _orb_similarity(
-            q["orb_desc"], c["orb_desc"], self._bf,
-            kp_q=q.get("orb_kp"), kp_c=c.get("orb_kp"),
+        sift_sim      = _sift_similarity(
+            q["sift_desc"], c["sift_desc"], self._bf,
+            kp_q=q.get("sift_kp"), kp_c=c.get("sift_kp"),
         )
         hu_sim        = _hu_similarity(q["hu_moments"],            c["hu_moments"])
         corner_sim    = _corner_similarity(q["corner_density"],    c["corner_density"])
@@ -204,13 +210,13 @@ class Matcher:
         bow_sim       = _bow_similarity(query_bow, cand_bow)
 
         score = (
-            self._w["contour"]   * contour_sim
-            + self._w["hist"]    * hist_sim
-            + self._w["orb"]     * orb_sim
-            + self._w["hu"]      * hu_sim
-            + self._w["corner"]  * corner_sim
+            self._w["contour"]     * contour_sim
+            + self._w["hist"]      * hist_sim
+            + self._w["sift"]      * sift_sim
+            + self._w["hu"]        * hu_sim
+            + self._w["corner"]    * corner_sim
             + self._w["shape_geo"] * shape_geo_sim
-            + self._w["bow"]     * bow_sim
+            + self._w["bow"]       * bow_sim
         )
 
         return MatchResult(
@@ -218,7 +224,7 @@ class Matcher:
             score=float(np.clip(score, 0.0, 1.0)),
             contour_sim=contour_sim,
             hist_sim=hist_sim,
-            orb_sim=orb_sim,
+            sift_sim=sift_sim,
             hu_sim=hu_sim,
             corner_sim=corner_sim,
             shape_geo_sim=shape_geo_sim,
@@ -274,7 +280,7 @@ def _hist_similarity(h_q: np.ndarray, h_c: np.ndarray) -> float:
     return float(np.clip(1.0 - dist, 0.0, 1.0))
 
 
-def _orb_similarity(
+def _sift_similarity(
     desc_q: np.ndarray | None,
     desc_c: np.ndarray | None,
     bf: cv2.BFMatcher,
@@ -283,9 +289,9 @@ def _orb_similarity(
     kp_c: list | None = None,
 ) -> float:
     """
-    ORB similarity with optional RANSAC homography verification.
+    SIFT similarity with optional RANSAC homography verification.
 
-    Step 1 — Lowe ratio test on Hamming distances to get candidate matches.
+    Step 1 — Lowe ratio test on L2 distances to get candidate matches.
     Step 2 — If keypoints are available (≥4 matches), run findHomography(RANSAC)
              to keep only geometrically consistent inliers.
 
@@ -348,13 +354,11 @@ def _shape_geo_similarity(geo_q: np.ndarray | None, geo_c: np.ndarray | None) ->
 
 def _build_bow_vocab(desc_list: list, k: int = _BOW_K) -> np.ndarray | None:
     """
-    Build a k-means visual vocabulary from a list of ORB descriptor arrays.
+    Build a k-means visual vocabulary from a list of SIFT descriptor arrays.
 
-    ORB descriptors are uint8 (Hamming space).  We cast to float32 for
-    cv2.kmeans — a standard approximation that works well in practice when
-    the goal is vocabulary quantisation rather than exact distance ranking.
+    SIFT descriptors are already float32 (L2 space).
 
-    Returns the (k, 32) float32 cluster centres, or None if there are too
+    Returns the (k, 128) float32 cluster centres, or None if there are too
     few descriptors to cluster.
     """
     all_descs = []
@@ -380,7 +384,7 @@ def _encode_bow(desc: np.ndarray | None, vocab: np.ndarray | None) -> np.ndarray
     """
     if desc is None or len(desc) == 0 or vocab is None or len(vocab) == 0:
         return None
-    desc_f = desc.astype(np.float32)          # (N, 32)
+    desc_f = desc.astype(np.float32)          # (N, 128)
     # Squared L2 distances to every vocab word: (N, k)
     diffs = desc_f[:, None, :] - vocab[None, :, :]
     dists_sq = np.einsum("nkd,nkd->nk", diffs, diffs)

@@ -13,7 +13,8 @@ CREATE TABLE IF NOT EXISTS products (
 CREATE TABLE IF NOT EXISTS features (
     id              SERIAL PRIMARY KEY,
     product_id      INTEGER     NOT NULL REFERENCES products(id) ON DELETE CASCADE,
-    orb_desc        BYTEA,                  -- pickle-serialized numpy (N, 32) uint8
+    sift_desc       BYTEA,                  -- pickle-serialized numpy (N, 128) float32 + keypoint coords
+    view_image_data BYTEA,                  -- raw bytes of the image for this specific view/angle
     hist_hsv        BYTEA,                  -- pickle-serialized numpy (50, 60) float32
     hu_moments      DOUBLE PRECISION[],     -- 7-element log-Hu vector
     corner_density  DOUBLE PRECISION,       -- normalized Harris corner scalar
