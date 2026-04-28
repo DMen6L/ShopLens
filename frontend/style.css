@@ -213,6 +213,58 @@ select:focus { border-color: var(--accent); }
 }
 .clear-btn:hover { background: rgba(0,0,0,0.8); }
 
+/* ── Preprocessing previews ─────────────────────────────────────────────── */
+
+.preprocess-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+.preprocess-panel.hidden { display: none; }
+.preprocess-panel > label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.preprocess-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+  gap: 0.65rem;
+}
+.preprocess-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 0.45rem;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.preprocess-card:hover { border-color: var(--accent); }
+.preprocess-card.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(233, 69, 96, 0.16);
+}
+.preprocess-card img {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+.preprocess-card span {
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
 /* ── Segmentation radio ─────────────────────────────────────────────────── */
 
 .seg-opts { display: flex; gap: 1rem; }
@@ -493,6 +545,11 @@ select:focus { border-color: var(--accent); }
 }
 .brush-dot-fg { background: #22c55e; }
 .brush-dot-bg { background: #ef4444; }
+.brush-dot-inpaint { background: #2563eb; }
+.brush-dot-erase {
+  background: linear-gradient(135deg, #fff 0 44%, #2563eb 45% 55%, #fff 56% 100%);
+  border: 1px solid #2563eb;
+}
 
 .size-label {
   display: inline-flex;

@@ -53,6 +53,11 @@
           </div>
         </div>
 
+        <div id="reg-preprocess" class="preprocess-panel hidden">
+          <label>Preprocessing</label>
+          <div id="reg-preprocess-grid" class="preprocess-grid"></div>
+        </div>
+
         <div class="field field-row">
           <label>Segmentation</label>
           <div class="seg-opts">
@@ -101,6 +106,11 @@
           </div>
         </div>
 
+        <div id="av-preprocess" class="preprocess-panel hidden">
+          <label>Preprocessing</label>
+          <div id="av-preprocess-grid" class="preprocess-grid"></div>
+        </div>
+
         <div class="field field-row">
           <label>Segmentation</label>
           <div class="seg-opts">
@@ -140,6 +150,11 @@
             <img id="q-preview" alt="preview" />
             <button type="button" class="clear-btn" onclick="clearPreview('q')">✕</button>
           </div>
+        </div>
+
+        <div id="q-preprocess" class="preprocess-panel hidden">
+          <label>Preprocessing</label>
+          <div id="q-preprocess-grid" class="preprocess-grid"></div>
         </div>
 
         <div class="form-row">
@@ -187,6 +202,12 @@
         <button type="button" id="brush-bg-btn" class="brush-tool" onclick="setBrushMode('bg')">
           <span class="brush-dot brush-dot-bg"></span>Background
         </button>
+        <button type="button" id="brush-inpaint-btn" class="brush-tool" onclick="setBrushMode('inpaint')">
+          <span class="brush-dot brush-dot-inpaint"></span>Inpaint
+        </button>
+        <button type="button" id="brush-inpaint-erase-btn" class="brush-tool" onclick="setBrushMode('erase_inpaint')">
+          <span class="brush-dot brush-dot-erase"></span>Erase Inpaint
+        </button>
         <label class="size-label">
           Brush
           <input type="range" id="brush-size" min="4" max="60" value="16"
@@ -195,10 +216,11 @@
         </label>
         <button type="button" class="btn-ghost-sm" onclick="invertMask()">Invert</button>
         <button type="button" class="btn-ghost-sm" onclick="resetMask()">Reset</button>
+        <button type="button" class="btn-ghost-sm" onclick="clearInpaintMask()">Clear Inpaint</button>
       </div>
       <div class="mask-canvas-wrap" id="mask-canvas-wrap">
         <canvas id="mask-canvas"></canvas>
-        <p class="canvas-hint">Click or drag to paint &nbsp;·&nbsp; Foreground = keep &nbsp;·&nbsp; Background = remove</p>
+        <p class="canvas-hint">Click or drag to paint &nbsp;·&nbsp; Foreground = keep &nbsp;·&nbsp; Background = remove &nbsp;·&nbsp; Inpaint = repair kept pixels</p>
       </div>
       <div class="mask-editor-actions">
         <button type="button" id="mask-confirm-btn" class="btn-primary">

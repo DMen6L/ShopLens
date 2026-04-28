@@ -33,6 +33,17 @@ from segmentation import grabcut_foreground, watershed_segment
 from vector_store import make_vector_store
 from visualizer import draw_matches, draw_score_bars
 
+# Preprocessing methods exposed to the frontend.  Keep values stable because
+# they are submitted in forms.
+PREPROCESS_METHODS = {
+    "none": "Original",
+    "mean": "Mean blur",
+    "gaussian": "Gaussian blur",
+    "median": "Median blur",
+    "morph_open": "Morphological opening",
+    "morph_close": "Morphological closing",
+}
+
 # Shared state — populated during lifespan startup
 db: ProductDB | None = None
 vs = None
@@ -67,6 +78,57 @@ def _decode_image(data: bytes) -> np.ndarray:
     if img is None:
         raise HTTPException(status_code=400, detail="Could not decode image — unsupported format")
     return img
+
+
+def _apply_preprocess(img: np.ndarray, method: str | None) -> np.ndarray:
+    """Apply a traditional OpenCV denoising/preprocessing operation."""
+    method = method or "none"
+    if method not in PREPROCESS_METHODS:
+        raise HTTPException(status_code=400, detail=f"Unknown preprocessing method: {method}")
+
+    if method == "none":
+        return img.copy()
+    if method == "mean":
+        return cv2.blur(img, (5, 5))
+    if method == "gaussian":
+        return cv2.GaussianBlur(img, (5, 5), 0)
+    if method == "median":
+        return cv2.medianBlur(img, 5)
+
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    if method == "morph_open":
+        return cv2.morphologyEx(img, cv2.MORPH_OPEN, kernel, iterations=1)
+    if method == "morph_close":
+        return cv2.morphologyEx(img, cv2.MORPH_CLOSE, kernel, iterations=1)
+
+    return img.copy()
+
+
+def _decode_binary_mask(mask_data: str, shape: tuple[int, int], empty_detail: str) -> np.ndarray:
+    """Decode a base64 PNG mask and normalize it to 0/255 with the target HxW."""
+    mask_bytes = base64.b64decode(mask_data)
+    mask_arr = np.frombuffer(mask_bytes, dtype=np.uint8)
+    mask = cv2.imdecode(mask_arr, cv2.IMREAD_GRAYSCALE)
+    if mask is None:
+        raise HTTPException(status_code=400, detail="Could not decode provided mask image")
+    if mask.shape[:2] != shape:
+        mask = cv2.resize(mask, (shape[1], shape[0]), interpolation=cv2.INTER_NEAREST)
+    _, mask = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
+    if np.count_nonzero(mask) == 0:
+        raise HTTPException(status_code=400, detail=empty_detail)
+    return mask
+
+
+def _apply_inpainting(img: np.ndarray, inpaint_mask_data: str | None) -> np.ndarray:
+    """Remove user-marked regions from the working image with Telea inpainting."""
+    if not inpaint_mask_data:
+        return img
+    inpaint_mask = _decode_binary_mask(
+        inpaint_mask_data,
+        img.shape[:2],
+        "Inpaint mask is empty — mark at least one area to remove",
+    )
+    return cv2.inpaint(img, inpaint_mask, 3, cv2.INPAINT_TELEA)
 
 
 def _segment(img: np.ndarray, method: str) -> tuple[np.ndarray, np.ndarray]:
@@ -136,6 +198,7 @@ def list_products():
 async def preview_segmentation(
     file: UploadFile = File(...),
     seg_method: str = Form("grabcut"),
+    preprocess_method: str = Form("none"),
 ):
     """
     Run segmentation on an uploaded image and return the result for interactive editing.
@@ -149,15 +212,34 @@ async def preview_segmentation(
     """
     raw = await file.read()
     img = _decode_image(raw)
-    mask, masked_img = _segment(img, seg_method)
+    working_img = _apply_preprocess(img, preprocess_method)
+    mask, masked_img = _segment(working_img, seg_method)
     ok, mask_buf = cv2.imencode(".png", mask)
     if not ok:
         raise RuntimeError("cv2.imencode failed for mask")
     mask_b64 = base64.b64encode(mask_buf.tobytes()).decode("ascii")
     return {
-        "original_img": _encode_png(img),
+        "original_img": _encode_png(working_img),
+        "preprocessed_img": _encode_png(working_img),
         "mask_b64": mask_b64,
         "masked_img": _encode_png(masked_img),
+    }
+
+
+@app.post("/products/preview-preprocessing")
+async def preview_preprocessing(file: UploadFile = File(...)):
+    """Return side-by-side previews for all supported preprocessing methods."""
+    raw = await file.read()
+    img = _decode_image(raw)
+    return {
+        "methods": [
+            {
+                "value": value,
+                "label": label,
+                "image": _encode_png(_apply_preprocess(img, value)),
+            }
+            for value, label in PREPROCESS_METHODS.items()
+        ]
     }
 
 
@@ -166,7 +248,9 @@ async def register_product(
     name: str = Form(...),
     file: UploadFile = File(...),
     seg_method: str = Form("grabcut"),
+    preprocess_method: str = Form("none"),
     mask_data: str | None = Form(None),
+    inpaint_mask_data: str | None = Form(None),
 ):
     """
     Register a new product.
@@ -184,23 +268,21 @@ async def register_product(
     """
     raw = await file.read()
     img = _decode_image(raw)
+    working_img = _apply_preprocess(img, preprocess_method)
 
     if mask_data:
-        mask_bytes = base64.b64decode(mask_data)
-        mask_arr = np.frombuffer(mask_bytes, dtype=np.uint8)
-        mask = cv2.imdecode(mask_arr, cv2.IMREAD_GRAYSCALE)
-        if mask is None:
-            raise HTTPException(status_code=400, detail="Could not decode provided mask image")
-        if mask.shape[:2] != img.shape[:2]:
-            mask = cv2.resize(mask, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_NEAREST)
-        _, mask = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
-        if np.count_nonzero(mask) == 0:
-            raise HTTPException(status_code=400, detail="Mask is empty — mark at least some foreground area")
-        masked_img = cv2.bitwise_and(img, img, mask=mask)
+        mask = _decode_binary_mask(
+            mask_data,
+            working_img.shape[:2],
+            "Mask is empty — mark at least some foreground area",
+        )
     else:
-        mask, masked_img = _segment(img, seg_method)
+        mask, _ = _segment(working_img, seg_method)
 
-    features = pipeline.extract(img, mask)
+    working_img = _apply_inpainting(working_img, inpaint_mask_data)
+    masked_img = cv2.bitwise_and(working_img, working_img, mask=mask)
+
+    features = pipeline.extract(working_img, mask)
     product_id = db.create_product(name, image_data=raw)
     feature_id = db.add_view(product_id, features, view_image_data=raw)
     vs.upsert(feature_id, product_id, features["embedding"])
@@ -220,7 +302,9 @@ async def add_product_view(
     product_id: int,
     file: UploadFile = File(...),
     seg_method: str = Form("grabcut"),
+    preprocess_method: str = Form("none"),
     mask_data: str | None = Form(None),
+    inpaint_mask_data: str | None = Form(None),
 ):
     """
     Add an additional view (angle/lighting condition) to an existing product.
@@ -243,23 +327,21 @@ async def add_product_view(
 
     raw = await file.read()
     img = _decode_image(raw)
+    working_img = _apply_preprocess(img, preprocess_method)
 
     if mask_data:
-        mask_bytes = base64.b64decode(mask_data)
-        mask_arr = np.frombuffer(mask_bytes, dtype=np.uint8)
-        mask = cv2.imdecode(mask_arr, cv2.IMREAD_GRAYSCALE)
-        if mask is None:
-            raise HTTPException(status_code=400, detail="Could not decode provided mask image")
-        if mask.shape[:2] != img.shape[:2]:
-            mask = cv2.resize(mask, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_NEAREST)
-        _, mask = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
-        if np.count_nonzero(mask) == 0:
-            raise HTTPException(status_code=400, detail="Mask is empty — mark at least some foreground area")
-        masked_img = cv2.bitwise_and(img, img, mask=mask)
+        mask = _decode_binary_mask(
+            mask_data,
+            working_img.shape[:2],
+            "Mask is empty — mark at least some foreground area",
+        )
     else:
-        mask, masked_img = _segment(img, seg_method)
+        mask, _ = _segment(working_img, seg_method)
 
-    features = pipeline.extract(img, mask)
+    working_img = _apply_inpainting(working_img, inpaint_mask_data)
+    masked_img = cv2.bitwise_and(working_img, working_img, mask=mask)
+
+    features = pipeline.extract(working_img, mask)
     feature_id = db.add_view(product_id, features, view_image_data=raw)
     vs.upsert(feature_id, product_id, features["embedding"])
 
@@ -279,7 +361,9 @@ async def query_products(
     file: UploadFile = File(...),
     top_k: int = Form(5),
     seg_method: str = Form("grabcut"),
+    preprocess_method: str = Form("none"),
     mask_data: str | None = Form(None),
+    inpaint_mask_data: str | None = Form(None),
 ):
     """
     Find the top-k most similar registered products for a query image.
@@ -308,22 +392,19 @@ async def query_products(
     """
     raw = await file.read()
     query_img = _decode_image(raw)
+    working_img = _apply_preprocess(query_img, preprocess_method)
 
     if mask_data:
-        mask_bytes = base64.b64decode(mask_data)
-        mask_arr = np.frombuffer(mask_bytes, dtype=np.uint8)
-        mask = cv2.imdecode(mask_arr, cv2.IMREAD_GRAYSCALE)
-        if mask is None:
-            raise HTTPException(status_code=400, detail="Could not decode provided mask image")
-        if mask.shape[:2] != query_img.shape[:2]:
-            mask = cv2.resize(mask, (query_img.shape[1], query_img.shape[0]), interpolation=cv2.INTER_NEAREST)
-        _, mask = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
-        if np.count_nonzero(mask) == 0:
-            raise HTTPException(status_code=400, detail="Mask is empty — mark at least some foreground area")
+        mask = _decode_binary_mask(
+            mask_data,
+            working_img.shape[:2],
+            "Mask is empty — mark at least some foreground area",
+        )
     else:
-        mask, _ = _segment(query_img, seg_method)
+        mask, _ = _segment(working_img, seg_method)
 
-    query_features = pipeline.extract(query_img, mask)
+    working_img = _apply_inpainting(working_img, inpaint_mask_data)
+    query_features = pipeline.extract(working_img, mask)
 
     match_results = matcher.match(query_features, top_k=top_k)
 
@@ -339,10 +420,10 @@ async def query_products(
                 pass
 
         if candidate_img is not None:
-            match_img_b64 = draw_matches(query_img, candidate_img)
+            match_img_b64 = draw_matches(working_img, candidate_img)
         else:
             # No stored image — fall back to encoded query image
-            match_img_b64 = _encode_png(query_img)
+            match_img_b64 = _encode_png(working_img)
 
         output.append({
             "product_id": r.product_id,

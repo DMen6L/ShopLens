@@ -10,20 +10,23 @@ Flow
 
 2. Fetch full features for each candidate from ProductDB.
 
-3. Re-rank with a weighted combination of five similarity scores:
+3. Re-rank with a weighted combination of similarity scores:
        w_contour * contour_sim   (Fourier shape descriptor — primary)
      + w_hu      * hu_sim        (Hu moments — secondary shape)
+     + w_shape_geo * shape_geo_sim (solidity/elongation/extent — primary shape)
      + w_hist    * hist_sim      (HSV colour histogram — secondary)
      + w_sift    * sift_sim      (SIFT + RANSAC — optional structural)
      + w_corner  * corner_sim    (Harris corner density — tie-breaker)
 
 Weights (default)
 -----------------
-    contour  0.50  — whole-object Fourier silhouette (primary discriminator)
-    hu       0.17  — Hu moment shape (complements Fourier)
-    hist     0.25  — colour (useful but not allowed to dominate)
-    sift     0.05  — boundary-ring SIFT; logo-suppressed structural evidence
-    corner   0.03  — boundary-ring Harris density (tie-breaker only)
+    contour   0.13  — whole-object Fourier silhouette; logo-blind
+    hist      0.12  — colour; tertiary, must not dominate
+    hu        0.18  — Hu moments; secondary shape descriptor
+    shape_geo 0.38  — solidity/elongation/extent; primary shape discriminator
+    bow       0.12  — Bag-of-Visual-Words; local texture patterns
+    sift      0.04  — boundary-ring SIFT; logo-suppressed structural evidence
+    corner    0.03  — boundary-ring Harris density (tie-breaker only)
 
 All individual similarity scores are in [0, 1] (1 = identical).
 The final `score` is also in [0, 1].
@@ -92,7 +95,7 @@ class Matcher:
     ----------
     db          : ProductDB instance (used to fetch candidate features)
     vector_store: VectorStore instance (used for ANN shortlist)
-    weights     : dict with keys contour/hist/sift/hu/corner — must sum to 1.0
+    weights     : dict with keys contour/hist/hu/shape_geo/bow/sift/corner — must sum to 1.0
     ann_factor  : how many extra candidates to fetch before re-ranking
                   (top_k * ann_factor vectors are retrieved from ANN)
     """
@@ -100,8 +103,8 @@ class Matcher:
     _DEFAULT_WEIGHTS = {
         "contour":   0.13,  # Fourier shape — global silhouette; logo-blind
         "hist":      0.12,  # colour — tertiary; must not dominate
-        "hu":        0.38,  # Hu moments — primary shape discriminator
-        "shape_geo": 0.18,  # solidity/elongation/extent — secondary shape
+        "hu":        0.18,  # Hu moments — secondary shape descriptor
+        "shape_geo": 0.38,  # solidity/elongation/extent — primary shape discriminator
         "bow":       0.12,  # Bag-of-Visual-Words — local texture patterns
         "sift":      0.04,  # SIFT boundary-ring RANSAC — structural evidence
         "corner":    0.03,  # corner density — tie-breaker only

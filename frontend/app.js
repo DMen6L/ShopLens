@@ -17,6 +17,12 @@ function switchTab(name) {
   if (name === 'addview')  loadProductSelector();
 }
 
+const preprocessState = {
+  reg: 'none',
+  av: 'none',
+  q: 'none',
+};
+
 // ---------------------------------------------------------------------------
 // Image preview & drag-and-drop
 // ---------------------------------------------------------------------------
@@ -32,6 +38,9 @@ function wirePreview(fileInputId, previewImgId, previewWrapId, dropZoneId) {
     previewImg.src = url;
     wrap.classList.remove('hidden');
     drop.style.display = 'none';
+    const prefix = fileInputId.replace('-file', '');
+    preprocessState[prefix] = 'none';
+    loadPreprocessPreviews(prefix, file);
   }
 
   input.addEventListener('change', () => {
@@ -60,10 +69,54 @@ function clearPreview(prefix) {
   const wrap  = document.getElementById(prefix + '-preview-wrap');
   const drop  = document.getElementById(prefix + '-drop');
   input.value = '';
+  preprocessState[prefix] = 'none';
+  const pre = document.getElementById(prefix + '-preprocess');
+  if (pre) pre.classList.add('hidden');
   wrap.classList.add('hidden');
   drop.style.display = '';
   const editor = document.getElementById('mask-editor');
   if (!editor.classList.contains('hidden')) cancelMaskEditor();
+}
+
+async function loadPreprocessPreviews(prefix, file) {
+  const wrap = document.getElementById(prefix + '-preprocess');
+  const grid = document.getElementById(prefix + '-preprocess-grid');
+  if (!wrap || !grid) return;
+
+  wrap.classList.remove('hidden');
+  grid.innerHTML = '<span class="status-msg"><span class="spinner"></span>Building previews…</span>';
+
+  const formData = new FormData();
+  formData.append('file', file);
+
+  try {
+    const res = await fetch('/products/preview-preprocessing', { method: 'POST', body: formData });
+    const json = await res.json();
+    if (!res.ok) {
+      grid.innerHTML = `<div class="alert-error">Previews failed: ${json.detail ?? res.statusText}</div>`;
+      return;
+    }
+
+    grid.innerHTML = json.methods.map(item => `
+      <button type="button"
+              class="preprocess-card ${item.value === preprocessState[prefix] ? 'active' : ''}"
+              data-prefix="${prefix}"
+              data-method="${item.value}"
+              onclick="selectPreprocess('${prefix}', '${item.value}')">
+        <img src="data:image/png;base64,${item.image}" alt="${item.label}" />
+        <span>${item.label}</span>
+      </button>
+    `).join('');
+  } catch (err) {
+    grid.innerHTML = `<div class="alert-error">Previews failed: ${err.message}</div>`;
+  }
+}
+
+function selectPreprocess(prefix, method) {
+  preprocessState[prefix] = method;
+  document.querySelectorAll(`#${prefix}-preprocess-grid .preprocess-card`).forEach(card => {
+    card.classList.toggle('active', card.dataset.method === method);
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -91,10 +144,11 @@ function scoreBadgeClass(score) {
 let origImg        = null;   // HTMLImageElement
 let maskData       = null;   // Uint8Array (origW * origH): 255=fg, 0=bg
 let initialMask    = null;   // Uint8Array — copy of the initial auto-mask (for reset)
+let inpaintData    = null;   // Uint8Array: 255 = remove with inpainting
 let origW = 0, origH = 0;
 let dispW = 0, dispH = 0;
 let scaleX = 1, scaleY = 1;
-let brushMode      = 'fg';   // 'fg' | 'bg'
+let brushMode      = 'fg';   // 'fg' | 'bg' | 'inpaint' | 'erase_inpaint'
 let brushSize      = 16;
 let isPainting     = false;
 let overlayCanvas  = null;   // reused offscreen canvas for compositing
@@ -104,6 +158,8 @@ let maskEditorContext = 'register';  // 'register' | 'query' | 'addview'
 // Preserved after a query so the "add as view" prompt can reuse them
 let lastQueryFile    = null;
 let lastQueryMaskB64 = null;
+let lastQueryInpaintMaskB64 = null;
+let lastQueryPreprocessMethod = 'none';
 
 // ---------------------------------------------------------------------------
 // Mask editor — init
@@ -128,6 +184,7 @@ function initMaskEditor(origImgB64, maskB64, context) {
 
       maskData    = new Uint8Array(origW * origH);
       initialMask = new Uint8Array(origW * origH);
+      inpaintData = new Uint8Array(origW * origH);
       for (let i = 0; i < origW * origH; i++) {
         const v = px[i * 4] > 127 ? 255 : 0;
         maskData[i]    = v;
@@ -209,6 +266,12 @@ function renderMaskCanvas() {
         d[pidx + 1] = 0;
         d[pidx + 2] = 0;
         d[pidx + 3] = 145;
+      } else if (inpaintData[oy * origW + ox] > 127) {
+        // Inpaint: blue tint over kept foreground.
+        d[pidx]     = 37;
+        d[pidx + 1] = 99;
+        d[pidx + 2] = 235;
+        d[pidx + 3] = 145;
       }
       // Foreground: leave transparent (original shows through)
     }
@@ -233,7 +296,6 @@ function paintAt(clientX, clientY) {
 
   // Brush radius in original-image pixels (keeps visual size proportional to display)
   const r   = Math.max(1, Math.round((brushSize / 2) * scaleX));
-  const val = brushMode === 'fg' ? 255 : 0;
   const r2  = r * r;
 
   const x0 = Math.max(0, ox - r);
@@ -244,7 +306,14 @@ function paintAt(clientX, clientY) {
   for (let py = y0; py <= y1; py++) {
     for (let px = x0; px <= x1; px++) {
       if ((px - ox) * (px - ox) + (py - oy) * (py - oy) <= r2) {
-        maskData[py * origW + px] = val;
+        const idx = py * origW + px;
+        if (brushMode === 'inpaint') {
+          inpaintData[idx] = 255;
+        } else if (brushMode === 'erase_inpaint') {
+          inpaintData[idx] = 0;
+        } else {
+          maskData[idx] = brushMode === 'fg' ? 255 : 0;
+        }
       }
     }
   }
@@ -289,6 +358,8 @@ function setBrushMode(mode) {
   brushMode = mode;
   document.getElementById('brush-fg-btn').classList.toggle('active', mode === 'fg');
   document.getElementById('brush-bg-btn').classList.toggle('active', mode === 'bg');
+  document.getElementById('brush-inpaint-btn').classList.toggle('active', mode === 'inpaint');
+  document.getElementById('brush-inpaint-erase-btn').classList.toggle('active', mode === 'erase_inpaint');
 }
 
 function invertMask() {
@@ -311,14 +382,32 @@ function resetMask() {
   renderMaskCanvas();
 }
 
+function clearInpaintMask() {
+  if (!inpaintData) return;
+  inpaintData.fill(0);
+  renderMaskCanvas();
+}
+
 function getMaskBase64() {
+  return getBinaryMaskBase64(maskData);
+}
+
+function getInpaintMaskBase64() {
+  if (!inpaintData) return null;
+  for (let i = 0; i < inpaintData.length; i++) {
+    if (inpaintData[i] > 127) return getBinaryMaskBase64(inpaintData);
+  }
+  return null;
+}
+
+function getBinaryMaskBase64(data) {
   const tmp = document.createElement('canvas');
   tmp.width  = origW;
   tmp.height = origH;
   const ctx  = tmp.getContext('2d');
   const imgData = ctx.createImageData(origW, origH);
   for (let i = 0; i < origW * origH; i++) {
-    const v = maskData[i];
+    const v = data[i];
     imgData.data[i * 4]     = v;
     imgData.data[i * 4 + 1] = v;
     imgData.data[i * 4 + 2] = v;
@@ -394,6 +483,7 @@ document.getElementById('register-form').addEventListener('submit', async (e) =>
   }
 
   const formData = new FormData(form);
+  formData.set('preprocess_method', preprocessState.reg);
   btn.disabled = true;
   btn.textContent = 'Loading…';
   setLoading(out, 'Running segmentation…');
@@ -431,6 +521,7 @@ async function confirmRegister() {
   const name      = form.querySelector('input[name="name"]').value.trim();
   const fileInput = document.getElementById('reg-file');
   const segMethod = form.querySelector('input[name="seg_method"]:checked').value;
+  const inpaintMaskB64 = getInpaintMaskBase64();
 
   if (!name) {
     setError(out, 'Product name is required.');
@@ -445,7 +536,9 @@ async function confirmRegister() {
   formData.append('name', name);
   formData.append('file', fileInput.files[0]);
   formData.append('seg_method', segMethod);
+  formData.append('preprocess_method', preprocessState.reg);
   formData.append('mask_data', getMaskBase64());
+  if (inpaintMaskB64) formData.append('inpaint_mask_data', inpaintMaskB64);
 
   btn.disabled = true;
   setLoading(out, 'Registering…');
@@ -500,6 +593,7 @@ document.getElementById('query-form').addEventListener('submit', async (e) => {
   }
 
   const formData = new FormData(form);
+  formData.set('preprocess_method', preprocessState.q);
   btn.disabled = true;
   btn.textContent = 'Loading…';
   setLoading(out, 'Running segmentation…');
@@ -541,8 +635,11 @@ async function confirmQuery() {
   }
 
   const maskB64   = getMaskBase64();
+  const inpaintMaskB64 = getInpaintMaskBase64();
   lastQueryFile    = fileInput.files[0];
   lastQueryMaskB64 = maskB64;
+  lastQueryInpaintMaskB64 = inpaintMaskB64;
+  lastQueryPreprocessMethod = preprocessState.q;
   const topK      = form.querySelector('select[name="top_k"]').value;
   const segMethod = form.querySelector('input[name="seg_method"]:checked').value;
 
@@ -557,7 +654,9 @@ async function confirmQuery() {
   formData.append('file', fileInput.files[0]);
   formData.append('top_k', topK);
   formData.append('seg_method', segMethod);
+  formData.append('preprocess_method', preprocessState.q);
   formData.append('mask_data', maskB64);
+  if (inpaintMaskB64) formData.append('inpaint_mask_data', inpaintMaskB64);
 
   try {
     const res  = await fetch('/products/query', { method: 'POST', body: formData });
@@ -699,6 +798,8 @@ async function addQueryAsView(productId, btn) {
   const formData = new FormData();
   formData.append('file', lastQueryFile);
   formData.append('mask_data', lastQueryMaskB64);
+  formData.append('preprocess_method', lastQueryPreprocessMethod);
+  if (lastQueryInpaintMaskB64) formData.append('inpaint_mask_data', lastQueryInpaintMaskB64);
 
   try {
     const res  = await fetch(`/products/${productId}/views`, { method: 'POST', body: formData });
@@ -769,6 +870,7 @@ document.getElementById('addview-form').addEventListener('submit', async (e) => 
   const formData = new FormData();
   formData.append('file', fileInput.files[0]);
   formData.append('seg_method', form.querySelector('input[name="seg_method"]:checked').value);
+  formData.append('preprocess_method', preprocessState.av);
 
   btn.disabled = true;
   btn.textContent = 'Loading…';
@@ -805,6 +907,7 @@ async function confirmAddView() {
   const productId = document.getElementById('av-product').value;
   const fileInput = document.getElementById('av-file');
   const segMethod = form.querySelector('input[name="seg_method"]:checked').value;
+  const inpaintMaskB64 = getInpaintMaskBase64();
 
   if (!productId || !fileInput.files[0]) {
     setError(out, 'Product or image missing.');
@@ -814,7 +917,9 @@ async function confirmAddView() {
   const formData = new FormData();
   formData.append('file', fileInput.files[0]);
   formData.append('seg_method', segMethod);
+  formData.append('preprocess_method', preprocessState.av);
   formData.append('mask_data', getMaskBase64());
+  if (inpaintMaskB64) formData.append('inpaint_mask_data', inpaintMaskB64);
 
   btn.disabled = true;
   setLoading(out, 'Adding view…');
